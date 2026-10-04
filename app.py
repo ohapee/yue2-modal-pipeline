@@ -23,7 +23,7 @@ YuE2 × Modal クラウド楽曲自動生成パイプライン (app.py)
    - 楽曲生成とGoogle Driveアップロードが完了次第、Discordへ直接試聴リンク付きリッチEmbed通知を即時送信。
 6. トリプル・トリガー対応:
    - Web UI: スマホ・ブラウザからワンタップ生成（手動歌詞入力 ＆ AI全自動生成の双方に対応）。
-   - Cron: 毎週月曜午前9時 (JST) に完全自動でAI作詞から楽曲生成・Drive保存・Discord通知まで一括実行。
+   - Cron: 2時間毎に完全自動でAI作詞から楽曲生成・Drive保存・Discord通知まで一括実行。
    - Local CLI: 開発・パラメータ検証用の手元実行 (modal run app.py)。
 """
 
@@ -465,11 +465,11 @@ def generate_music_core(
     return artifacts
 
 # ---------------------------------------------------------------------------
-# 8. トリガー①: 定期自動実行 (Cron: 毎週月曜 午前9時 JST / 日曜24:00 UTC)
+# 8. トリガー①: 定期自動実行 (Cron: 2時間毎に1度自動生成)
 # ---------------------------------------------------------------------------
 @app.function(
     image=image,
-    schedule=modal.Cron("0 0 * * 1"),
+    schedule=modal.Cron("0 */2 * * *"),
     secrets=[
         modal.Secret.from_name("gemini-secret"),
     ],
