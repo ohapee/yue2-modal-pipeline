@@ -5,3 +5,11 @@ outputs/
 *.wav
 *.mp3
 .modal.toml
+token.json
+client_secret*.json
+test_drive*.py
+
+# 環境変数設定ファイル
+.env
+.env.*
+
