@@ -29,7 +29,7 @@
    - 楽曲生成とDriveアップロードが完了すると、Discordチャンネルへ試聴リンク・歌詞プレビュー・スタイル設定付きのEmbedカードを即座に送信。
 6. **完全クラウド完結のトリプル・トリガー**
    - **Web UI (ASGI / FastAPI)**: スマホ・ブラウザ対応のレスポンシブ画面。「AIにおまかせ生成」と「自由作詞生成」をタブで切り替え可能。
-   - **定時バッチ生成 (Modal Cron)**: 毎週月曜午前9時 (JST) に完全自動でAI作詞から生成・Drive保存・通知まで一括実行。
+   - **定時バッチ生成 (Modal Cron)**: 2時間毎（偶数時の0分）に完全自動でAI作詞から生成・Drive保存・通知まで一括実行。
    - **ローカルCLI**: パラメータ検証や手元テスト用（`modal run app.py`）。
 
 ---
@@ -111,7 +111,7 @@ modal deploy app.py
 デプロイが完了すると、専用のWeb URLが表示されます：
 ```text
 ✓ Deployed app yue2-song-generator
-├── Function: scheduled_batch_generation (Cron: 0 0 * * 1)
+├── Function: scheduled_batch_generation (Cron: 0 */2 * * *)
 └── Web function: web -> https://<workspace>--yue2-song-generator-web.modal.run
 ```
 URLをスマートフォンやPCブラウザで開き、**「🤖 AIおまかせ生成」** または **「✍️ 自由作詞」** からワンタップで生成を開始できます。
