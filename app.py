@@ -3,7 +3,7 @@ YuE2 × Modal クラウド楽曲自動生成パイプライン (app.py)
 
 【概要】
 オープンソースAI音楽生成モデル「YuE2 (3B)」を、サーバーレスGPUインフラ「Modal」上で稼働させ、
-完全クラウド完結（ローカルPCのGPU・電源不要）で楽曲を生成・保管するシステムです。
+完全クラウド完結（ローカルPCのGPU・電源不要）で楽曲を生成・保管・通知するシステムです。
 
 【主な機能】
 1. サーバーレスGPU推論 (NVIDIA L4 24GB VRAM):
@@ -16,18 +16,31 @@ YuE2 × Modal クラウド楽曲自動生成パイプライン (app.py)
 3. Google Drive 自動連携 (upload_to_drive):
    - OAuth 2.0 ユーザー認証 (USER_TOKEN_B64) を利用し、個人のGoogle Drive容量を直接使用。
    - 生成された音声 (FLAC)、楽譜 (score.abc)、プロンプト設定 (prompt_info.txt) を yue2 フォルダへ自動転送。
-4. トリプル・トリガー対応:
-   - Web UI: スマートフォンやブラウザからワンタップで生成できるFastAPIフォーム。
-   - Cron: 毎週月曜午前9時 (JST) に完全自動でストック楽曲を生成するバッチ。
+4. LLM自律作詞・スタイルプロンプト生成 (generate_lyrics_and_style):
+   - Gemini API (gemini-3.8-flash) を活用し、季節・時間帯・ランダム音楽要素から
+     YuE2専用の楽曲タイトル・スタイルプロンプト（英語）・日本語歌詞を自律生成。
+5. Discord 完了通知連携 (notify_discord):
+   - 楽曲生成とGoogle Driveアップロードが完了次第、Discordへ直接試聴リンク付きリッチEmbed通知を即時送信。
+6. トリプル・トリガー対応:
+   - Web UI: スマホ・ブラウザからワンタップ生成（手動歌詞入力 ＆ AI全自動生成の双方に対応）。
+   - Cron: 毎週月曜午前9時 (JST) に完全自動でAI作詞から楽曲生成・Drive保存・Discord通知まで一括実行。
    - Local CLI: 開発・パラメータ検証用の手元実行 (modal run app.py)。
 """
 
-import modal
+import os
+import json
+import base64
+import io
 import datetime
+import random
 import re
+import shutil
 from pathlib import Path
+
+import modal
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse
+from pydantic import BaseModel, Field
 
 # ---------------------------------------------------------------------------
 # 1. Modal アプリケーションおよびクラウド永続ストレージ (Volume) の定義
@@ -59,6 +72,9 @@ image = (
         "pykakasi",
         "google-api-python-client",
         "google-auth",
+        "google-genai",
+        "requests",
+        "pydantic",
         "git+https://github.com/multimodal-art-projection/YuE.git",
     )
     .env({"HF_HOME": "/root/models/hf"})
@@ -122,18 +138,204 @@ def optimize_lyrics(raw_lyrics: str, max_line_len: int = 8) -> str:
     return "\n".join(optimized_lines)
 
 # ---------------------------------------------------------------------------
-# 4. Google Drive 自動アップロード関数 (OAuth 2.0 連携)
+# 4. LLM自律作詞・スタイルプロンプト生成エンジン (Gemini API)
+# ---------------------------------------------------------------------------
+class SongGenerationPlan(BaseModel):
+    title: str = Field(description="英語またはローマ字の短い楽曲タイトル（アンダースコア区切り、英数字のみ、例: autumn_rain）")
+    style_prompt: str = Field(description="YuE2向けスタイルプロンプト（英語。ジャンル、BPM、楽器、ボーカルスタイル、ムードなど）")
+    theme_description: str = Field(description="日本語による楽曲の着想・テーマ解説（1行程度）")
+    lyrics: str = Field(description="日本語の歌詞。[Verse], [Chorus], [Outro] の構造を含める。")
+
+
+def generate_lyrics_and_style(theme_hint: str = "") -> dict:
+    """
+    Gemini API (gemini-3.8-flash) を呼び出し、
+    季節・時間帯・指定テーマ・ランダムな音楽要素に応じた楽曲タイトル、YuE2用スタイルプロンプト、日本語歌詞を自律生成します。
+    """
+    api_key = os.environ.get("GEMINI_API_KEY")
+    if not api_key:
+        print("[Gemini] GEMINI_API_KEY が未設定のため、デフォルトプリセットを使用します。")
+        return {
+            "title": "chill_morning",
+            "style_prompt": "Japanese, female vocal, chill acoustic guitar, lo-fi hip hop beats, 80 BPM, warm piano, nostalgic mood",
+            "theme_description": "静かな朝の光の中で一歩を踏み出すチルなアコースティックナンバー",
+            "lyrics": "[Verse]\n静かな朝の光の中で\n新しいページが開いていく\n[Chorus]\n歩き出そう 自分のリズムで\nどこまでも続く空へ\n[Outro]\n穏やかな風",
+        }
+
+    try:
+        from google import genai
+        from google.genai import types
+
+        # 現在の季節と時間帯（JST基準）を推定
+        now_jst = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=9)))
+        month = now_jst.month
+        hour = now_jst.hour
+
+        seasons = {
+            12: "冬（凛とした澄んだ空気、温もり）", 1: "冬（新春、静けさ、雪）", 2: "晩冬（春を待つ気配）",
+            3: "早春（芽吹き、出会いと別れ）", 4: "春（桜、希望、新生活）", 5: "初夏（新緑、爽快な風）",
+            6: "初夏・梅雨（雨のしずく、静謐）", 7: "夏（太陽、海、情熱）", 8: "晩夏（夕立、祭りの余韻、切なさ）",
+            9: "初秋（秋風、夕暮れ）", 10: "秋（紅葉、秋の夜長、琥珀色）", 11: "晩秋（落ち葉、冬の足音）"
+        }
+        season_str = seasons.get(month, "四季折々の情景")
+
+        if 5 <= hour < 11:
+            time_str = "朝（爽やか、目覚め、前向きな光）"
+        elif 11 <= hour < 17:
+            time_str = "昼・午後（日常、木漏れ日、心地よいリズム）"
+        elif 17 <= hour < 22:
+            time_str = "夕暮れ・夜（黄昏、帰路、ノスタルジー、街の灯り）"
+        else:
+            time_str = "深夜（静寂、内省的、チル、物思いに耽る時間）"
+
+        # ランダムなジャンル・ボーカルの組み合わせ候補
+        genre_pool = [
+            "lo-fi hip hop chillout, warm Rhodes piano, vinyl crackle, 78 BPM",
+            "modern J-pop ballad, acoustic grand piano, emotional strings, 88 BPM",
+            "city pop, groovy slap bass, bright synth brass, funk guitar, 115 BPM",
+            "acoustic folk pop, gentle fingerpicking acoustic guitar, warm cello, 82 BPM",
+            "neo soul, smooth electric guitar chords, mellow bassline, relaxed beat, 85 BPM",
+            "chill synthwave, analog vintage synth pads, nostalgic melody, 95 BPM",
+        ]
+        vocal_pool = [
+            "Japanese female vocal, sweet and whispery voice",
+            "Japanese female vocal, clear and expressive emotional voice",
+            "Japanese male vocal, warm and gentle acoustic voice",
+            "Japanese female vocal, stylish and airy voice",
+        ]
+
+        selected_genre = random.choice(genre_pool)
+        selected_vocal = random.choice(vocal_pool)
+
+        user_prompt = f"""
+あなたはプロの作詞家兼音楽プロデューサーです。
+AI音楽生成モデル「YuE2」に投入するための、楽曲の「タイトル」「スタイルプロンプト（英語）」「日本語歌詞」「テーマ解説」を生成してください。
+
+【現在のシチュエーション】
+- 季節: {season_str}
+- 時間帯: {time_str}
+- 推奨サウンドベース: {selected_genre}, {selected_vocal}
+{f'- ユーザー指定のテーマ・着想: {theme_hint}' if theme_hint else ''}
+
+【YuE2向け歌詞のルール】
+- セクションタグ（[Verse], [Chorus], [Outro]）を必ず含めること。
+- [Verse] は情景描写や日常の心理を描き、[Chorus] は感情のコアを高らかに歌い、[Outro] で静かに余韻を残すこと。
+- 各行は長すぎず、日本語として響きが美しく自然な言葉遣いにすること。
+- 生成時間は1〜2分程度を想定するため、各セクション2〜4行程度でコンパクトに構成すること。
+
+【スタイルプロンプトのルール】
+- 英語で記述すること。
+- 'Japanese, ... vocal' を含め、楽器、テンポ（BPM）、ムードを具体的に指定すること。
+"""
+        client = genai.Client(api_key=api_key)
+        response = client.models.generate_content(
+            model="gemini-3.8-flash",
+            contents=user_prompt,
+            config=types.GenerateContentConfig(
+                response_mime_type="application/json",
+                response_schema=SongGenerationPlan,
+                temperature=0.75,
+            ),
+        )
+        plan_dict = json.loads(response.text)
+        print(f"=== [Gemini 自律作詞完了] タイトル: {plan_dict.get('title')} ===")
+        return plan_dict
+    except Exception as e:
+        print(f"[Gemini 作詞エラー] API呼び出しに失敗したためフォールバックを使用: {e}")
+        return {
+            "title": "fallback_melody",
+            "style_prompt": "Japanese, clear expressive female vocal, modern J-pop ballad, 90 BPM, piano, strings",
+            "theme_description": "心に寄り添うエモーショナルなJ-POPバラード",
+            "lyrics": "[Verse]\nビルの隙間から差し込む光が\n冷たいアスファルトを染めていく\n[Chorus]\n消えない痛みを抱えたままで\n僕らは次の朝へと走り出す\n[Outro]\n光の中へ",
+        }
+
+# ---------------------------------------------------------------------------
+# 5. Discord Webhook 完了通知モジュール
+# ---------------------------------------------------------------------------
+def notify_discord(
+    title: str,
+    style: str,
+    theme: str,
+    lyrics: str,
+    subfolder_id: str,
+    seed: int,
+    trigger_type: str = "手動生成",
+) -> bool:
+    """
+    楽曲生成およびGoogle Driveアップロード完了時に、Discord WebhookへリッチEmbed通知を送信します。
+    """
+    webhook_url = os.environ.get("DISCORD_WEBHOOK_URL", "").strip()
+    if not webhook_url:
+        print("[Discord] DISCORD_WEBHOOK_URL が未設定のため、通知をスキップします。")
+        return False
+
+    try:
+        import requests
+
+        drive_folder_url = f"https://drive.google.com/drive/folders/{subfolder_id}" if subfolder_id else "https://drive.google.com"
+        
+        # 歌詞のプレビュー（最初の4行程度）
+        lyrics_lines = [l for l in lyrics.splitlines() if l.strip() and not l.startswith("[")]
+        preview_lyrics = "\n".join(lyrics_lines[:4])
+        if len(lyrics_lines) > 4:
+            preview_lyrics += "\n..."
+
+        embed = {
+            "title": f"🎵 新曲生成完了: {title}",
+            "description": f"**{theme}**\n\nクラウドGPU（NVIDIA L4）での楽曲推論およびGoogle Driveへの自動バックアップが正常に完了しました。",
+            "color": 0x1A73E8,  # Google Blue
+            "fields": [
+                {
+                    "name": "🎨 スタイル・サウンド",
+                    "value": f"`{style[:150]}`",
+                    "inline": False,
+                },
+                {
+                    "name": "📁 Google Drive 保存先",
+                    "value": f"[▶ Google Drive で試聴・ファイルをダウンロード]({drive_folder_url})",
+                    "inline": False,
+                },
+                {
+                    "name": "🎲 シード値 / 実行種別",
+                    "value": f"Seed: `{seed}` | 種別: **{trigger_type}**",
+                    "inline": True,
+                },
+                {
+                    "name": "📝 歌詞プレビュー",
+                    "value": f"```\n{preview_lyrics}\n```",
+                    "inline": False,
+                },
+            ],
+            "footer": {
+                "text": "YuE2 × Modal 楽曲自動生成パイプライン",
+            },
+            "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        }
+
+        payload = {
+            "content": f"🎉 **YuE2 楽曲自動生成パイプライン** より新曲のお知らせです！",
+            "embeds": [embed],
+        }
+
+        res = requests.post(webhook_url, json=payload, timeout=10)
+        if res.status_code in (200, 204):
+            print(f"=== [Discord] 完了通知を送信しました: {title} ===")
+            return True
+        else:
+            print(f"[Discord エラー] ステータスコード {res.status_code}: {res.text}")
+            return False
+    except Exception as e:
+        print(f"[Discord エラー] 通知送信に失敗しました: {e}")
+        return False
+
+# ---------------------------------------------------------------------------
+# 6. Google Drive 自動アップロード関数 (OAuth 2.0 連携)
 # ---------------------------------------------------------------------------
 def upload_to_drive(subfolder_name: str, artifacts: dict, prompt_info: str) -> str:
     """
     生成された楽曲ファイル（FLAC、ABC楽譜、メタデータログ）を
     Google Driveの指定フォルダ（yue2）へ自動アップロードします。
     """
-    import json
-    import base64
-    import os
-    import io
-
     user_token_b64 = os.environ.get("USER_TOKEN_B64")
     target_folder_id = os.environ.get("TARGET_FOLDER_ID")
     if not user_token_b64 or not target_folder_id:
@@ -178,20 +380,30 @@ def upload_to_drive(subfolder_name: str, artifacts: dict, prompt_info: str) -> s
         return ""
 
 # ---------------------------------------------------------------------------
-# 5. コア生成関数 (NVIDIA L4 GPU / タイムアウト10分)
+# 7. コア生成関数 (NVIDIA L4 GPU / タイムアウト10分)
 # ---------------------------------------------------------------------------
 @app.function(
     image=image,
     gpu="L4",
     timeout=600,
     volumes={"/root/models": model_volume, "/root/songs": song_storage},
-    secrets=[modal.Secret.from_name("google-drive-secret")],
+    secrets=[
+        modal.Secret.from_name("google-drive-secret"),
+        modal.Secret.from_name("discord-secret"),
+    ],
 )
-def generate_music_core(style_prompt: str, lyrics: str, seed: int = 42, title: str = "song") -> dict:
+def generate_music_core(
+    style_prompt: str,
+    lyrics: str,
+    seed: int = 42,
+    title: str = "song",
+    theme_description: str = "",
+    trigger_type: str = "手動生成",
+) -> dict:
     """
     L4 GPU上でYuE2モデルをロードし、シンボリック・プランニング（ABC楽譜）を経て楽曲を生成します。
+    完了後は Modal Volume に永続保存し、Google Drive へ同期、Discord へ完了通知を送信します。
     """
-    import shutil
     from yue2 import YuE2Pipeline
 
     # 歌詞の自動最適化を実行
@@ -203,7 +415,7 @@ def generate_music_core(style_prompt: str, lyrics: str, seed: int = 42, title: s
         shutil.rmtree(temp_out)
     temp_out.mkdir(parents=True, exist_ok=True)
 
-    print(f"--- YuE2 推論開始: {title} (Seed: {seed}) ---")
+    print(f"--- YuE2 推論開始: {title} (Seed: {seed}, Trigger: {trigger_type}) ---")
     with YuE2Pipeline.from_pretrained("m-a-p/YuE2-3B", device="cuda") as pipe:
         song = pipe(style=style_prompt, lyrics=optimized_lyrics, cot="full", seed=seed)
         song.save_artifacts(str(temp_out))
@@ -221,77 +433,143 @@ def generate_music_core(style_prompt: str, lyrics: str, seed: int = 42, title: s
             artifacts[f.name] = data
             (permanent_dir / f.name).write_bytes(data)
 
-    # 人間が読める元歌詞と最適化歌詞の両方をログファイルに記録
+    # 人間が読める元歌詞、最適化歌詞、テーマ解説をログファイルに記録
     prompt_info_text = (
-        f"Title: {title}\nSeed: {seed}\nStyle: {style_prompt}\n\n"
+        f"Title: {title}\n"
+        f"Timestamp: {timestamp}\n"
+        f"Trigger: {trigger_type}\n"
+        f"Seed: {seed}\n"
+        f"Theme: {theme_description}\n"
+        f"Style: {style_prompt}\n\n"
         f"Original Lyrics:\n{lyrics}\n\n"
-        f"Optimized Lyrics (Sent to Model):\n{optimized_lyrics}\n"
+        f"Optimized Lyrics (Sent to YuE2 Model):\n{optimized_lyrics}\n"
     )
     (permanent_dir / "prompt_info.txt").write_text(prompt_info_text, encoding="utf-8")
     song_storage.commit()
     print(f"--- Modal Volume 永続保存完了: {permanent_dir} ---")
 
     # Google Drive への自動同期
-    upload_to_drive(subfolder_name=subfolder_name, artifacts=artifacts, prompt_info=prompt_info_text)
+    subfolder_id = upload_to_drive(subfolder_name=subfolder_name, artifacts=artifacts, prompt_info=prompt_info_text)
+
+    # Discord への完了通知
+    notify_discord(
+        title=title,
+        style=style_prompt,
+        theme=theme_description or "AI生成楽曲",
+        lyrics=lyrics,
+        subfolder_id=subfolder_id,
+        seed=seed,
+        trigger_type=trigger_type,
+    )
 
     return artifacts
 
 # ---------------------------------------------------------------------------
-# 6. トリガー①: 定期自動実行 (Cron: 毎週月曜 午前9時 JST / 日曜24:00 UTC)
+# 8. トリガー①: 定期自動実行 (Cron: 毎週月曜 午前9時 JST / 日曜24:00 UTC)
 # ---------------------------------------------------------------------------
-@app.function(schedule=modal.Cron("0 0 * * 1"))
+@app.function(
+    image=image,
+    schedule=modal.Cron("0 0 * * 1"),
+    secrets=[
+        modal.Secret.from_name("gemini-secret"),
+    ],
+)
 def scheduled_batch_generation():
     """
-    週次で自動起動し、完全放置でストック用の新曲を生成します。
+    週次で自動起動し、Geminiで現在の季節・時間帯に応じた楽曲テーマと歌詞を自律生成した上で、
+    GPUによる楽曲生成・Drive保存・Discord通知まで完全放置で実行します。
     """
-    print("【Cron 定期実行】週次の自動楽曲ストック生成を開始します...")
-    default_style = "Japanese, chill acoustic guitar, lo-fi hip hop beats, 80 BPM, warm piano, nostalgic mood"
-    default_lyrics = """[Verse]
-静かな朝の光の中で
-新しいページが開いていく
-[Chorus]
-歩き出そう 自分のリズムで
-どこまでも続く空へ
-[Outro]
-穏やかな風"""
-    generate_music_core.remote(
-        style_prompt=default_style,
-        lyrics=default_lyrics,
-        seed=int(datetime.datetime.now().timestamp()) % 10000,
-        title="scheduled_lofi"
+    print("【Cron 定期実行】週次の自律作詞・楽曲ストック生成を開始します...")
+    
+    # 1. Gemini による自律作詞とスタイルプロンプト生成（CPU上で数秒で完了）
+    plan = generate_lyrics_and_style()
+    print(f"【AI作詞決定】曲名: {plan['title']}, テーマ: {plan['theme_description']}")
+
+    # 2. クラウドGPU（L4）へジョブを投入
+    seed = int(datetime.datetime.now().timestamp()) % 100000
+    generate_music_core.spawn(
+        style_prompt=plan["style_prompt"],
+        lyrics=plan["lyrics"],
+        seed=seed,
+        title=f"auto_{plan['title']}",
+        theme_description=plan["theme_description"],
+        trigger_type="Cron定期バッチ実行",
     )
+    print("【Cron 定期実行】GPU生成タスクをキューに投入しました。完了後にDriveおよびDiscordへ自動連携されます。")
 
 # ---------------------------------------------------------------------------
-# 7. トリガー②: 手動生成用 Web UI (FastAPI / スマホ対応)
+# 9. トリガー②: 手動生成用 Web UI (FastAPI / スマホ対応)
 # ---------------------------------------------------------------------------
 web_app = FastAPI()
 
 HTML_CONTENT = """<!DOCTYPE html>
-<html>
+<html lang="ja">
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>YuE2 Cloud Generator</title>
+    <title>YuE2 クラウド楽曲自動生成スタジオ</title>
     <style>
-        body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; max-width: 600px; margin: 20px auto; padding: 15px; background: #f7f9fa; }
-        h2 { color: #1a73e8; }
-        label { display: block; margin-top: 12px; font-weight: bold; }
-        input, textarea { width: 100%; padding: 10px; margin-top: 5px; border: 1px solid #ccc; border-radius: 6px; box-sizing: border-box; }
-        button { margin-top: 20px; width: 100%; padding: 12px; background: #1a73e8; color: white; border: none; border-radius: 6px; font-size: 16px; cursor: pointer; }
-        .tip { font-size: 13px; color: #555; margin-top: 4px; }
+        :root { --primary: #1a73e8; --bg: #f8f9fa; --card: #ffffff; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 680px; margin: 20px auto; padding: 15px; background: var(--bg); color: #333; }
+        .card { background: var(--card); border-radius: 12px; padding: 24px; box-shadow: 0 2px 10px rgba(0,0,0,0.06); margin-bottom: 20px; }
+        h2 { color: var(--primary); margin-top: 0; display: flex; align-items: center; gap: 8px; }
+        h3 { margin-top: 0; font-size: 16px; color: #555; }
+        label { display: block; margin-top: 14px; font-weight: 600; font-size: 14px; }
+        input, textarea, select { width: 100%; padding: 10px; margin-top: 6px; border: 1px solid #d0d7de; border-radius: 8px; box-sizing: border-box; font-size: 14px; }
+        textarea { resize: vertical; }
+        .btn { width: 100%; padding: 12px; border: none; border-radius: 8px; font-size: 15px; font-weight: 600; cursor: pointer; transition: 0.2s; margin-top: 16px; }
+        .btn-primary { background: var(--primary); color: white; }
+        .btn-primary:hover { background: #1557b0; }
+        .btn-ai { background: #137333; color: white; }
+        .btn-ai:hover { background: #0d5224; }
+        .tip { font-size: 12px; color: #666; margin-top: 6px; line-height: 1.5; }
+        .tabs { display: flex; gap: 8px; margin-bottom: 16px; }
+        .tab-btn { flex: 1; padding: 10px; text-align: center; background: #e8f0fe; color: var(--primary); border: none; border-radius: 8px; font-weight: 600; cursor: pointer; }
+        .tab-btn.active { background: var(--primary); color: white; }
+        .badge { display: inline-block; padding: 2px 8px; border-radius: 12px; font-size: 11px; font-weight: bold; background: #e8f0fe; color: var(--primary); }
     </style>
 </head>
 <body>
-    <h2>🎵 YuE2 クラウド楽曲生成</h2>
-    <form action="/generate" method="post">
-        <label>曲名 (Title):</label>
-        <input type="text" name="title" value="drive_sync_track" required>
-        <label>スタイルプロンプト (Style):</label>
-        <input type="text" name="style" value="Japanese, modern J-pop ballad, 92 BPM, piano, strings" required>
-        <label>シード値 (Seed):</label>
-        <input type="number" name="seed" value="42">
-        <label>歌詞 (Lyrics):</label>
-        <textarea name="lyrics" rows="8">[Verse]
+    <div class="card">
+        <h2>🎵 YuE2 クラウド楽曲生成スタジオ <span class="badge">Phase 4</span></h2>
+        <p class="tip">サーバーレスGPU（NVIDIA L4）で高品質な楽曲を即座に生成し、Google Driveへの保存とDiscordへの完了通知を完全自動で行います。</p>
+        
+        <div class="tabs">
+            <button class="tab-btn active" onclick="showTab('ai-tab')">🤖 AIおまかせ生成 (Gemini)</button>
+            <button class="tab-btn" onclick="showTab('manual-tab')">✍️ 自由作詞・詳細設定</button>
+        </div>
+
+        <!-- AIおまかせフォーム -->
+        <div id="ai-tab">
+            <h3>季節や時間帯、キーワードからAIが自動で作詞・作曲設定を行います</h3>
+            <form action="/generate-ai" method="post">
+                <label>曲のテーマ・キーワード（任意）:</label>
+                <input type="text" name="theme_hint" placeholder="例: 秋の雨上がりの夕暮れ、星空ドライブ、切ない失恋、疾走感">
+                <div class="tip">※空欄の場合は、現在の季節（10月）や時間帯に合わせたテーマをGeminiが自律選択します。</div>
+
+                <label>シード値 (Seed):</label>
+                <input type="number" name="seed" value="0">
+                <div class="tip">※0の場合はランダムシードが自動設定されます。</div>
+
+                <button type="submit" class="btn btn-ai">✨ AIにおまかせで楽曲生成を開始</button>
+            </form>
+        </div>
+
+        <!-- 手動入力フォーム -->
+        <div id="manual-tab" style="display:none;">
+            <h3>自分で歌詞やサウンドスタイルを指定して生成します</h3>
+            <form action="/generate-manual" method="post">
+                <label>曲名 (Title):</label>
+                <input type="text" name="title" value="drive_sync_track" required>
+
+                <label>スタイルプロンプト (Style - 英語):</label>
+                <input type="text" name="style" value="Japanese, clear expressive female vocal, modern J-pop ballad, 92 BPM, piano, strings" required>
+
+                <label>シード値 (Seed):</label>
+                <input type="number" name="seed" value="42">
+
+                <label>歌詞 (Lyrics):</label>
+                <textarea name="lyrics" rows="7">[Verse]
 ビルの隙間から差し込む光が
 冷たいアスファルトを染めていく
 [Chorus]
@@ -299,9 +577,22 @@ HTML_CONTENT = """<!DOCTYPE html>
 僕らは次の朝へと走り出す
 [Outro]
 光の中へ</textarea>
-        <div class="tip">※入力歌詞は自動で「ひらがな・分かち書き・5〜8文字改行」に最適化され、生成完了後に Google Drive (yue2 フォルダ) へ自動転送されます。</div>
-        <button type="submit">クラウドGPUで生成を開始</button>
-    </form>
+                <div class="tip">※入力歌詞は自動で「ひらがな・分かち書き・5〜8文字改行」に最適化され、YuE2に投入されます。</div>
+
+                <button type="submit" class="btn btn-primary">🚀 クラウドGPUで生成を開始</button>
+            </form>
+        </div>
+    </div>
+
+    <script>
+        function showTab(tabId) {
+            document.getElementById('ai-tab').style.display = tabId === 'ai-tab' ? 'block' : 'none';
+            document.getElementById('manual-tab').style.display = tabId === 'manual-tab' ? 'block' : 'none';
+            const btns = document.querySelectorAll('.tab-btn');
+            btns[0].classList.toggle('active', tabId === 'ai-tab');
+            btns[1].classList.toggle('active', tabId === 'manual-tab');
+        }
+    </script>
 </body>
 </html>"""
 
@@ -309,8 +600,46 @@ HTML_CONTENT = """<!DOCTYPE html>
 async def web_ui():
     return HTML_CONTENT
 
-@web_app.post("/generate", response_class=HTMLResponse)
-async def handle_generate(request: Request):
+@web_app.post("/generate-ai", response_class=HTMLResponse)
+async def handle_generate_ai(request: Request):
+    form = await request.form()
+    theme_hint = str(form.get("theme_hint") or "").strip()
+    seed_raw = form.get("seed")
+    try:
+        seed = int(seed_raw) if seed_raw and int(seed_raw) != 0 else int(datetime.datetime.now().timestamp()) % 100000
+    except (ValueError, TypeError):
+        seed = 42
+
+    # Geminiで自動作詞
+    plan = generate_lyrics_and_style(theme_hint=theme_hint)
+    title = f"web_{plan['title']}"
+
+    generate_music_core.spawn(
+        style_prompt=plan["style_prompt"],
+        lyrics=plan["lyrics"],
+        seed=seed,
+        title=title,
+        theme_description=plan["theme_description"],
+        trigger_type="Web UI (AIおまかせ生成)",
+    )
+
+    return f"""<!DOCTYPE html>
+<html lang="ja"><body style="font-family:sans-serif; text-align:center; padding:50px; background:#f8f9fa;">
+    <div style="max-width:550px; margin:auto; background:white; padding:30px; border-radius:12px; box-shadow:0 2px 8px rgba(0,0,0,0.08);">
+        <h3 style="color:#137333;">✨ AIおまかせ生成を開始しました</h3>
+        <p>曲名: <b>{title}</b></p>
+        <p style="font-size:14px; color:#555;">テーマ: {plan['theme_description']}</p>
+        <p style="font-size:13px; color:#777; background:#f1f3f4; padding:10px; border-radius:6px; text-align:left;">
+            <b>スタイル:</b> {plan['style_prompt']}<br>
+            <b>シード値:</b> {seed}
+        </p>
+        <p style="font-size:14px;">生成完了後、<b>Google Drive (yue2フォルダ)</b> および <b>Discord通知</b> に自動転送されます。</p>
+        <p style="margin-top:24px;"><a href="/" style="display:inline-block; padding:10px 20px; background:#1a73e8; color:white; text-decoration:none; border-radius:6px;">← もう1曲生成する</a></p>
+    </div>
+</body></html>"""
+
+@web_app.post("/generate-manual", response_class=HTMLResponse)
+async def handle_generate_manual(request: Request):
     form = await request.form()
     title = str(form.get("title") or "web_track")
     style = str(form.get("style") or "Japanese, modern J-pop ballad, 92 BPM, piano, strings")
@@ -321,38 +650,85 @@ async def handle_generate(request: Request):
     except (ValueError, TypeError):
         seed = 42
 
-    generate_music_core.spawn(style_prompt=style, lyrics=lyrics, seed=seed, title=title)
+    generate_music_core.spawn(
+        style_prompt=style,
+        lyrics=lyrics,
+        seed=seed,
+        title=title,
+        theme_description="Web UI手動入力による生成",
+        trigger_type="Web UI (手動設定)",
+    )
+
     return f"""<!DOCTYPE html>
-<html><body style="font-family:sans-serif; text-align:center; padding:50px;">
-    <h3 style="color:#1a73e8;">🚀 生成リクエストを受け付けました</h3>
-    <p>Title: <b>{title}</b></p>
-    <p>クラウドGPU（L4）にて生成中です。完了した音声は <b>Google Drive (yue2 フォルダ)</b> に自動保存されます。</p>
-    <p style="margin-top:20px;"><a href="/">← もう1曲生成する</a></p>
+<html lang="ja"><body style="font-family:sans-serif; text-align:center; padding:50px; background:#f8f9fa;">
+    <div style="max-width:550px; margin:auto; background:white; padding:30px; border-radius:12px; box-shadow:0 2px 8px rgba(0,0,0,0.08);">
+        <h3 style="color:#1a73e8;">🚀 生成リクエストを受け付けました</h3>
+        <p>曲名: <b>{title}</b> (Seed: {seed})</p>
+        <p>クラウドGPU（L4）にて生成中です。完了した音声は <b>Google Drive (yue2 フォルダ)</b> および <b>Discord</b> に自動送信されます。</p>
+        <p style="margin-top:24px;"><a href="/" style="display:inline-block; padding:10px 20px; background:#1a73e8; color:white; text-decoration:none; border-radius:6px;">← もう1曲生成する</a></p>
+    </div>
 </body></html>"""
 
-@app.function(image=image)
+@app.function(
+    image=image,
+    secrets=[
+        modal.Secret.from_name("gemini-secret"),
+    ],
+)
 @modal.asgi_app()
 def web():
     return web_app
 
 # ---------------------------------------------------------------------------
-# 8. トリガー③: ローカルCLI実行エントリポイント (手元テスト用)
+# 10. トリガー③: ローカルCLI実行エントリポイント (手元テスト用)
 # ---------------------------------------------------------------------------
 @app.local_entrypoint()
 def main(
-    style: str = "Japanese, clear expressive female vocal, modern J-pop ballad, 92 BPM, acoustic piano, strings",
+    style: str = "",
     lyrics_file: str = "",
-    title: str = "cli_song",
+    title: str = "",
     seed: int = 42,
+    auto_ai: bool = False,
+    theme: str = "",
 ):
-    if lyrics_file and Path(lyrics_file).exists():
-        lyrics = Path(lyrics_file).read_text(encoding="utf-8").strip()
+    if auto_ai or (not style and not lyrics_file and not title):
+        print("【CLI】Geminiによる自律作詞モードで生成パラメータを取得中...")
+        # ローカル環境のGEMINI_API_KEYを読み取り（必要に応じて）
+        if not os.environ.get("GEMINI_API_KEY"):
+            env_file = Path("/home/eiichi/src/yt-analysis/.env")
+            if env_file.exists():
+                for line in env_file.read_text(encoding="utf-8").splitlines():
+                    if line.startswith("GEMINI_API_KEY="):
+                        os.environ["GEMINI_API_KEY"] = line.split("=", 1)[1].strip().strip('"').strip("'")
+                        break
+        plan = generate_lyrics_and_style(theme_hint=theme)
+        style = plan["style_prompt"]
+        lyrics = plan["lyrics"]
+        title = f"cli_{plan['title']}"
+        theme_desc = plan["theme_description"]
+        print(f"決定した曲名: {title}")
+        print(f"テーマ: {theme_desc}")
     else:
-        lyrics = "[Verse]\nビルの隙間から差し込む光が\n冷たいアスファルトを染めていく\n[Chorus]\n消えない痛みを抱えたままで\n僕らは次の朝へと走り出す\n[Outro]\n光の中へ"
+        if lyrics_file and Path(lyrics_file).exists():
+            lyrics = Path(lyrics_file).read_text(encoding="utf-8").strip()
+        else:
+            lyrics = "[Verse]\nビルの隙間から差し込む光が\n冷たいアスファルトを染めていく\n[Chorus]\n消えない痛みを抱えたままで\n僕らは次の朝へと走り出す\n[Outro]\n光の中へ"
+        if not style:
+            style = "Japanese, clear expressive female vocal, modern J-pop ballad, 92 BPM, acoustic piano, strings"
+        if not title:
+            title = "cli_song"
+        theme_desc = "ローカルCLIからの手動指定実行"
 
-    print(f"ローカルからクラウドGPUへジョブを投入: {title} (Seed: {seed})")
-    artifacts = generate_music_core.remote(style_prompt=style, lyrics=lyrics, seed=seed, title=title)
-    
+    print(f"クラウドGPUへジョブを投入: {title} (Seed: {seed})")
+    artifacts = generate_music_core.remote(
+        style_prompt=style,
+        lyrics=lyrics,
+        seed=seed,
+        title=title,
+        theme_description=theme_desc,
+        trigger_type="ローカルCLI",
+    )
+
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     out_dir = Path("outputs") / f"{title}_{timestamp}"
     out_dir.mkdir(parents=True, exist_ok=True)
