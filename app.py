@@ -238,7 +238,119 @@ def convert_flac_to_mp3(flac_path: Path, mp3_path: Path, bitrate: str = "192k", 
         return False
 
 # ---------------------------------------------------------------------------
-# 5. LLM自律作詞・スタイルプロンプト生成エンジン (Gemini API)
+# 5. マルチメディア生成モジュール (ジャケット画像 & ビジュアライザー動画)
+# ---------------------------------------------------------------------------
+def generate_cover_art(
+    title: str,
+    theme_description: str,
+    style_prompt: str,
+    output_png_path: Path,
+    output_3000_jpg_path: Path,
+) -> bool:
+    """
+    Gemini 画像生成モデル (gemini-2.5-flash-image) を呼び出し、
+    楽曲の世界観に完全に合致したジャケット画像を生成して 3000x3000px 配信規格 JPG へアップスケールします。
+    """
+    api_key = os.environ.get("GEMINI_API_KEY")
+    if not api_key:
+        print("[ジャケット画像] GEMINI_API_KEY が未設定のためスキップします。")
+        return False
+    try:
+        from google import genai
+        client = genai.Client(api_key=api_key)
+
+        image_prompt = (
+            f"Album cover art, anime aesthetic or cinematic photo, masterpiece, vibrant lighting, "
+            f"theme: {theme_description}, style: {style_prompt}, square 1:1 aspect ratio, high resolution, no text"
+        )
+        print(f"--- [Gemini] ジャケット画像生成中: {title} ---")
+        response = client.models.generate_content(
+            model="gemini-2.5-flash-image",
+            contents=image_prompt,
+        )
+        img_bytes = None
+        if response.candidates and response.candidates[0].content and response.candidates[0].content.parts:
+            for part in response.candidates[0].content.parts:
+                if hasattr(part, "inline_data") and part.inline_data:
+                    img_bytes = part.inline_data.data
+                    break
+
+        if not img_bytes:
+            print("[ジャケット画像] 画像データの取得に失敗しました。")
+            return False
+
+        output_png_path.write_bytes(img_bytes)
+
+        # FFmpeg で 3000x3000px 配信規格 JPG へ高画質アップスケール（Lanczos）
+        cmd = [
+            "ffmpeg", "-y",
+            "-i", str(output_png_path),
+            "-vf", "scale=3000:3000:flags=lanczos",
+            "-q:v", "2",
+            str(output_3000_jpg_path),
+        ]
+        res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        if res.returncode == 0:
+            print(f"--- [FFmpeg] 3000x3000px ジャケット画像作成完了: {output_3000_jpg_path.name} ---")
+            return True
+        else:
+            print(f"[FFmpeg エラー] 画像リサイズ失敗: {res.stderr.decode('utf-8', errors='ignore')}")
+            return False
+    except Exception as e:
+        print(f"[ジャケット画像 エラー] 生成中に例外が発生しました: {e}")
+        return False
+
+
+def render_visualizer_video(
+    cover_image_path: Path,
+    audio_path: Path,
+    output_video_path: Path,
+) -> bool:
+    """
+    FFmpeg を使用して、ジャケット画像と音声から波形ビジュアライザー動画（1920x1080 16:9 MP4）を生成します。
+    - 背景: ジャケット画像の拡大 ＋ ぼかし (gblur)
+    - 前面中央: 正方形ジャケットアート（700x700）
+    - 下部: 音楽のダイナミクスに連動するネオンシアン波形 (showwaves)
+    - 音声: 192kbps AAC
+    """
+    try:
+        print(f"--- [FFmpeg] フルHDビジュアライザー動画レンダリング開始: {output_video_path.name} ---")
+        filter_str = (
+            "[0:v]scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080,gblur=sigma=20[bg]; "
+            "[0:v]scale=700:700[fg]; "
+            "[1:a]showwaves=s=1920x200:mode=line:colors=0x00e5ff@0.85[wave]; "
+            "[bg][fg]overlay=(W-w)/2:(H-h)/2-40[v1]; "
+            "[v1][wave]overlay=0:H-h-20[outv]"
+        )
+        cmd = [
+            "ffmpeg", "-y",
+            "-loop", "1", "-i", str(cover_image_path),
+            "-i", str(audio_path),
+            "-filter_complex", filter_str,
+            "-map", "[outv]",
+            "-map", "1:a",
+            "-c:v", "libx264",
+            "-preset", "veryfast",
+            "-crf", "22",
+            "-pix_fmt", "yuv420p",
+            "-c:a", "aac",
+            "-b:a", "192k",
+            "-shortest",
+            str(output_video_path),
+        ]
+        res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        if res.returncode == 0:
+            print(f"--- [FFmpeg] 動画レンダリング完了: {output_video_path.name} (サイズ: {output_video_path.stat().st_size / 1024 / 1024:.2f} MB) ---")
+            return True
+        else:
+            print(f"[FFmpeg エラー] 動画レンダリング失敗: {res.stderr.decode('utf-8', errors='ignore')}")
+            return False
+    except Exception as e:
+        print(f"[FFmpeg エラー] 動画生成中に例外が発生しました: {e}")
+        return False
+
+# ---------------------------------------------------------------------------
+# 6. LLM自律作詞・スタイルプロンプト生成エンジン (Gemini API)
 # ---------------------------------------------------------------------------
 class SongGenerationPlan(BaseModel):
     title: str = Field(description="英語またはローマ字の短い楽曲タイトル（アンダースコア区切り、英数字のみ、例: starlight_drive, neon_horizon, summer_breeze）")
@@ -439,7 +551,7 @@ AI音楽生成モデル「YuE2」に投入するための、楽曲の「タイ�
         }
 
 # ---------------------------------------------------------------------------
-# 6. Discord Webhook 完了通知モジュール
+# 7. Discord Webhook 完了通知モジュール (マルチメディア対応)
 # ---------------------------------------------------------------------------
 def notify_discord(
     title: str,
@@ -449,9 +561,12 @@ def notify_discord(
     subfolder_id: str,
     seed: int,
     trigger_type: str = "手動生成",
+    has_video: bool = False,
+    has_cover: bool = False,
 ) -> bool:
     """
-    楽曲生成およびGoogle Driveアップロード完了時に、Discord WebhookへリッチEmbed通知を送信します。
+    楽曲生成、ジャケット画像生成、動画レンダリングおよびGoogle Driveアップロード完了時に、
+    Discord WebhookへリッチEmbed通知を送信します。
     """
     webhook_url = os.environ.get("DISCORD_WEBHOOK_URL", "").strip()
     if not webhook_url:
@@ -469,9 +584,15 @@ def notify_discord(
         if len(lyrics_lines) > 4:
             preview_lyrics += "\n..."
 
+        artifacts_desc = "・🎵 音源: FLAC & 192kbps MP3"
+        if has_cover:
+            artifacts_desc += "\n・🖼 ジャケット: 3000×3000px 配信規格JPG"
+        if has_video:
+            artifacts_desc += "\n・🎬 動画: 1080p フルHD ビジュアライザー動画"
+
         embed = {
-            "title": f"🎵 新曲生成完了: {title}",
-            "description": f"**{theme}**\n\nクラウドGPU（NVIDIA L4）での楽曲推論、192kbps MP3変換、およびGoogle Driveへの自動保存が正常に完了しました。",
+            "title": f"🎉 新曲・マルチメディア完成: {title}",
+            "description": f"**{theme}**\n\nYuE2推論、3000pxジャケット生成、1080pビジュアライザー動画化、およびGoogle Driveへの自動保存が完了しました！",
             "color": 0x1A73E8,  # Google Blue
             "fields": [
                 {
@@ -480,8 +601,13 @@ def notify_discord(
                     "inline": False,
                 },
                 {
+                    "name": "📦 生成された成果物セット",
+                    "value": artifacts_desc,
+                    "inline": False,
+                },
+                {
                     "name": "📁 Google Drive 保存先",
-                    "value": f"[▶ Google Drive で試聴（FLAC & MP3）]({drive_folder_url})",
+                    "value": f"[▶ Google Drive で確認・再生・ダウンロード]({drive_folder_url})",
                     "inline": False,
                 },
                 {
@@ -496,7 +622,7 @@ def notify_discord(
                 },
             ],
             "footer": {
-                "text": "YuE2 × Modal 楽曲自動生成パイプライン (MP3対応)",
+                "text": "YuE2 × Modal マルチメディア自動生成 (ジャケット＆動画対応)",
             },
             "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
         }
@@ -589,37 +715,37 @@ def cleanup_storage_if_needed(
 # ---------------------------------------------------------------------------
 # 8. Google Drive 自動連携 & mp3集約保存モジュール (OAuth 2.0 連携)
 # ---------------------------------------------------------------------------
-def get_or_create_mp3_folder(service, target_folder_id: str) -> str:
+def get_or_create_shared_folder(service, target_folder_id: str, folder_name: str) -> str:
     """
-    Google Drive の target_folder_id 配下に 'mp3' フォルダが存在するか検索し、
+    Google Drive の target_folder_id 配下に指定名（mp3, covers, videos など）のフォルダが存在するか検索し、
     存在しなければ自動作成してそのフォルダ ID を返します。
     """
     try:
-        query = f"'{target_folder_id}' in parents and name = 'mp3' and mimeType = 'application/vnd.google-apps.folder' and trashed = false"
+        query = f"'{target_folder_id}' in parents and name = '{folder_name}' and mimeType = 'application/vnd.google-apps.folder' and trashed = false"
         res = service.files().list(q=query, spaces="drive", fields="files(id, name)").execute()
         files = res.get("files", [])
         if files:
             return files[0]["id"]
 
         folder_metadata = {
-            "name": "mp3",
+            "name": folder_name,
             "mimeType": "application/vnd.google-apps.folder",
             "parents": [target_folder_id],
         }
         folder = service.files().create(body=folder_metadata, fields="id").execute()
         folder_id = folder.get("id")
-        print(f"=== [Google Drive] 'mp3' フォルダを新規作成しました (ID: {folder_id}) ===")
+        print(f"=== [Google Drive] '{folder_name}' 共有フォルダを新規作成しました (ID: {folder_id}) ===")
         return folder_id
     except Exception as e:
-        print(f"[Google Drive エラー] mp3 フォルダの取得・作成に失敗しました: {e}")
+        print(f"[Google Drive エラー] '{folder_name}' フォルダの取得・作成に失敗しました: {e}")
         return ""
 
 
 def upload_to_drive(subfolder_name: str, artifacts: dict, prompt_info: str) -> str:
     """
-    生成された楽曲ファイル（FLAC、MP3、ABC楽譜、メタデータログ）を
+    生成された楽曲ファイル（FLAC、MP3、ジャケット画像、ビジュアライザー動画、ABC楽譜、メタデータログ）を
     Google Driveの個別フォルダ（yue2/曲名_日時/）へ保存し、
-    さらに MP3 ファイルを共有フォルダ（yue2/mp3/）へ集約配置します。
+    さらに MP3 / ジャケット画像 / 動画 をそれぞれの共有フォルダ（yue2/mp3/, yue2/covers/, yue2/videos/）へ集約配置します。
     """
     user_token_b64 = os.environ.get("USER_TOKEN_B64")
     target_folder_id = os.environ.get("TARGET_FOLDER_ID")
@@ -648,6 +774,9 @@ def upload_to_drive(subfolder_name: str, artifacts: dict, prompt_info: str) -> s
 
         # 2. 生成アセット群を個別フォルダへアップロード
         mp3_data = None
+        cover_data = None
+        video_data = None
+
         for fname, data in artifacts.items():
             meta = {"name": fname, "parents": [subfolder_id]}
             if fname.endswith(".flac"):
@@ -655,6 +784,15 @@ def upload_to_drive(subfolder_name: str, artifacts: dict, prompt_info: str) -> s
             elif fname.endswith(".mp3"):
                 mtype = "audio/mpeg"
                 mp3_data = data
+            elif fname.endswith(".jpg") or fname.endswith(".jpeg"):
+                mtype = "image/jpeg"
+                if "3000" in fname or "cover" in fname:
+                    cover_data = data
+            elif fname.endswith(".png"):
+                mtype = "image/png"
+            elif fname.endswith(".mp4"):
+                mtype = "video/mp4"
+                video_data = data
             elif fname.endswith(".abc"):
                 mtype = "text/plain"
             else:
@@ -667,15 +805,39 @@ def upload_to_drive(subfolder_name: str, artifacts: dict, prompt_info: str) -> s
         info_media = MediaIoBaseUpload(io.BytesIO(prompt_info.encode("utf-8")), mimetype="text/plain")
         service.files().create(body=info_meta, media_body=info_media).execute()
 
-        # 4. 【新規】Google Drive の 'mp3' フォルダへ「曲名_日時.mp3」として集約保存
+        # 4. 【マルチメディア集約保存】mp3, covers, videos 共有フォルダへ自動配置
+        # (1) mp3 フォルダ
         if mp3_data:
-            mp3_folder_id = get_or_create_mp3_folder(service, target_folder_id)
-            if mp3_folder_id:
-                mp3_filename = f"{subfolder_name}.mp3"
-                mp3_meta = {"name": mp3_filename, "parents": [mp3_folder_id]}
-                mp3_media = MediaIoBaseUpload(io.BytesIO(mp3_data), mimetype="audio/mpeg")
-                service.files().create(body=mp3_meta, media_body=mp3_media).execute()
-                print(f"=== [Google Drive] mp3 フォルダへ集約保存完了: {mp3_filename} ===")
+            mp3_fid = get_or_create_shared_folder(service, target_folder_id, "mp3")
+            if mp3_fid:
+                mp3_name = f"{subfolder_name}.mp3"
+                service.files().create(
+                    body={"name": mp3_name, "parents": [mp3_fid]},
+                    media_body=MediaIoBaseUpload(io.BytesIO(mp3_data), mimetype="audio/mpeg"),
+                ).execute()
+                print(f"=== [Google Drive] mp3 フォルダへ集約保存完了: {mp3_name} ===")
+
+        # (2) covers フォルダ (3000×3000px 配信規格ジャケット)
+        if cover_data:
+            covers_fid = get_or_create_shared_folder(service, target_folder_id, "covers")
+            if covers_fid:
+                cover_name = f"{subfolder_name}.jpg"
+                service.files().create(
+                    body={"name": cover_name, "parents": [covers_fid]},
+                    media_body=MediaIoBaseUpload(io.BytesIO(cover_data), mimetype="image/jpeg"),
+                ).execute()
+                print(f"=== [Google Drive] covers フォルダへ集約保存完了: {cover_name} ===")
+
+        # (3) videos フォルダ (フルHD 1080p ビジュアライザー動画)
+        if video_data:
+            videos_fid = get_or_create_shared_folder(service, target_folder_id, "videos")
+            if videos_fid:
+                video_name = f"{subfolder_name}.mp4"
+                service.files().create(
+                    body={"name": video_name, "parents": [videos_fid]},
+                    media_body=MediaIoBaseUpload(io.BytesIO(video_data), mimetype="video/mp4"),
+                ).execute()
+                print(f"=== [Google Drive] videos フォルダへ集約保存完了: {video_name} ===")
 
         print(f"=== [Google Drive] 自動アップロード完了: {subfolder_name} (ID: {subfolder_id}) ===")
         return subfolder_id
@@ -694,6 +856,7 @@ def upload_to_drive(subfolder_name: str, artifacts: dict, prompt_info: str) -> s
     secrets=[
         modal.Secret.from_name("google-drive-secret"),
         modal.Secret.from_name("discord-secret"),
+        modal.Secret.from_name("gemini-secret"),
     ],
 )
 def generate_music_core(
@@ -706,7 +869,8 @@ def generate_music_core(
 ) -> dict:
     """
     L4 GPU上でYuE2モデルをロードし、シンボリック・プランニング（ABC楽譜）を経て楽曲を生成します。
-    生成後は可逆圧縮FLACから192kbps MP3へ変換し、Modal Volume および Google Drive へ保存、Discord へ通知します。
+    生成後は192kbps MP3変換、3000pxジャケット生成、1080pビジュアライザー動画化を行い、
+    Modal Volume および Google Drive へ保存、Discord へ通知します。
     """
     from yue2 import YuE2Pipeline
 
@@ -733,6 +897,26 @@ def generate_music_core(
         print(f"--- [FFmpeg] 192kbps MP3 へ変換中: {flac_file.name} ---")
         if convert_flac_to_mp3(flac_file, mp3_file, bitrate="192k", max_sec=MAX_SONG_DURATION_SEC):
             print(f"--- [FFmpeg] MP3 変換完了: {mp3_file.name} (サイズ: {mp3_file.stat().st_size / 1024 / 1024:.2f} MB) ---")
+
+    # 【マルチメディア展開】ジャケット画像 (3000x3000px) ＆ ビジュアライザー動画 (1080p MP4) の自動生成
+    cover_raw = temp_out / "cover_raw.png"
+    cover_3000 = temp_out / "cover_art_3000.jpg"
+    has_cover = generate_cover_art(
+        title=title,
+        theme_description=theme_description,
+        style_prompt=style_prompt,
+        output_png_path=cover_raw,
+        output_3000_jpg_path=cover_3000,
+    )
+
+    video_file = temp_out / "video.mp4"
+    has_video = False
+    if has_cover and mp3_file.exists():
+        has_video = render_visualizer_video(
+            cover_image_path=cover_raw,
+            audio_path=mp3_file,
+            output_video_path=video_file,
+        )
 
     # Modal Volume への永続保存
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -762,7 +946,7 @@ def generate_music_core(
     song_storage.commit()
     print(f"--- Modal Volume 永続保存完了: {permanent_dir} ---")
 
-    # Google Drive への自動同期（個別フォルダ ＆ mp3集約フォルダ）
+    # Google Drive への自動同期（個別フォルダ ＆ mp3/covers/videos 集約フォルダ）
     subfolder_id = upload_to_drive(subfolder_name=subfolder_name, artifacts=artifacts, prompt_info=prompt_info_text)
 
     # 【ストレージ管理】5GB超過時の自動ローテーション削除 or 毎回削除（Drive転送成功時のみ）
@@ -784,6 +968,8 @@ def generate_music_core(
         subfolder_id=subfolder_id,
         seed=seed,
         trigger_type=trigger_type,
+        has_video=has_video,
+        has_cover=has_cover,
     )
 
     return artifacts
@@ -853,7 +1039,7 @@ def sync_flac_to_mp3_batch():
         service = build("drive", "v3", credentials=creds)
 
         # 1. Google Drive の 'mp3' フォルダを取得または作成
-        mp3_folder_id = get_or_create_mp3_folder(service, target_folder_id)
+        mp3_folder_id = get_or_create_shared_folder(service, target_folder_id, "mp3")
         if not mp3_folder_id:
             print("[同期バッチ エラー] mp3 フォルダを特定できませんでした。")
             return
@@ -1052,7 +1238,7 @@ async def handle_generate_ai(request: Request):
             <b>スタイル:</b> {plan['style_prompt']}<br>
             <b>シード値:</b> {seed}
         </p>
-        <p style="font-size:14px;">生成完了後、<b>Google Drive (個別フォルダ ＆ mp3フォルダ)</b> および <b>Discord通知</b> に自動転送されます。</p>
+        <p style="font-size:14px;">生成完了後、<b>Google Drive (個別フォルダ ＆ mp3/covers/videos 集約フォルダ)</b> および <b>Discord通知</b> に自動転送されます（音源・3000pxジャケット・動画フルセット）。</p>
         <p style="margin-top:24px;"><a href="/" style="display:inline-block; padding:10px 20px; background:#1a73e8; color:white; text-decoration:none; border-radius:6px;">← もう1曲生成する</a></p>
     </div>
 </body></html>"""
@@ -1083,7 +1269,7 @@ async def handle_generate_manual(request: Request):
     <div style="max-width:550px; margin:auto; background:white; padding:30px; border-radius:12px; box-shadow:0 2px 8px rgba(0,0,0,0.08);">
         <h3 style="color:#1a73e8;">🚀 生成リクエストを受け付けました</h3>
         <p>曲名: <b>{title}</b> (Seed: {seed})</p>
-        <p>クラウドGPU（L4）にて生成中です。完了した音声は <b>Google Drive (個別フォルダ ＆ mp3フォルダ)</b> および <b>Discord</b> に自動送信されます。</p>
+        <p>クラウドGPU（L4）にて生成中です。完了後は <b>Google Drive (個別フォルダ ＆ mp3/covers/videos 集約フォルダ)</b> および <b>Discord</b> に自動送信されます（音源・3000pxジャケット・動画フルセット）。</p>
         <p style="margin-top:24px;"><a href="/" style="display:inline-block; padding:10px 20px; background:#1a73e8; color:white; text-decoration:none; border-radius:6px;">← もう1曲生成する</a></p>
     </div>
 </body></html>"""
