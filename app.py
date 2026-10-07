@@ -483,7 +483,76 @@ def notify_discord(
         return False
 
 # ---------------------------------------------------------------------------
-# 7. Google Drive 自動連携 & mp3集約保存モジュール (OAuth 2.0 連携)
+# 7. ストレージ容量監視 & クリーンアップモジュール (5GB超過時 or 毎回削除)
+# ---------------------------------------------------------------------------
+def get_dir_size_bytes(path: Path) -> int:
+    """
+    指定ディレクトリ内のファイル総サイズ（バイト）を計算します。
+    """
+    total = 0
+    try:
+        for entry in path.rglob("*"):
+            if entry.is_file():
+                total += entry.stat().st_size
+    except Exception:
+        pass
+    return total
+
+
+def cleanup_storage_if_needed(
+    songs_root: Path,
+    max_gb: float = 5.0,
+    purge_immediately: bool = False,
+    current_subfolder: str = "",
+) -> None:
+    """
+    Google Drive への転送成功後、ストレージのクリーンアップを実行します。
+    - purge_immediately が True: Drive転送が成功した曲を即座に削除（毎回削除モード）
+    - 5GB超過時: Google Drive転送済みの古い曲から順に安全に自動削除（5GB上限モード）
+    """
+    try:
+        # 1. 毎回即時削除モード
+        if purge_immediately and current_subfolder:
+            cur_dir = songs_root / current_subfolder
+            if cur_dir.exists():
+                print(f"--- [ストレージ管理] 毎回削除モード: {current_subfolder} を削除し容量を解放します ---")
+                shutil.rmtree(cur_dir)
+                song_storage.commit()
+                return
+
+        # 2. 5GB 容量監視モード
+        total_bytes = get_dir_size_bytes(songs_root)
+        max_bytes = int(max_gb * 1024 * 1024 * 1024)
+        total_mb = total_bytes / (1024 * 1024)
+
+        if total_bytes <= max_bytes:
+            print(f"--- [ストレージ監視] 現在の楽曲ストレージ使用量: {total_mb:.1f} MB / 上限 {max_gb:.1f} GB ---")
+            return
+
+        print(f"--- [ストレージ警告] 容量上限 ({max_gb} GB) を超過 ({total_mb:.1f} MB)。古い楽曲から自動削除を開始します ---")
+        song_dirs = sorted([d for d in songs_root.iterdir() if d.is_dir()])
+        deleted_count = 0
+        target_bytes = int(max_bytes * 0.8)  # 上限の80%（4GB）まで安全マージンを確保
+
+        for s_dir in song_dirs:
+            if s_dir.name == current_subfolder:
+                continue  # 最新生成曲は保護
+
+            print(f"--- [ストレージ管理] 容量確保のため削除: {s_dir.name} ---")
+            shutil.rmtree(s_dir)
+            deleted_count += 1
+            total_bytes = get_dir_size_bytes(songs_root)
+            if total_bytes <= target_bytes:
+                break
+
+        song_storage.commit()
+        print(f"=== [ストレージ管理完了] {deleted_count} 件の古い楽曲を自動削除しました（新使用量: {total_bytes / (1024*1024):.1f} MB） ===")
+    except Exception as e:
+        print(f"[ストレージ管理 エラー] クリーンアップ中に例外が発生しました: {e}")
+
+
+# ---------------------------------------------------------------------------
+# 8. Google Drive 自動連携 & mp3集約保存モジュール (OAuth 2.0 連携)
 # ---------------------------------------------------------------------------
 def get_or_create_mp3_folder(service, target_folder_id: str) -> str:
     """
@@ -660,6 +729,16 @@ def generate_music_core(
 
     # Google Drive への自動同期（個別フォルダ ＆ mp3集約フォルダ）
     subfolder_id = upload_to_drive(subfolder_name=subfolder_name, artifacts=artifacts, prompt_info=prompt_info_text)
+
+    # 【ストレージ管理】5GB超過時の自動ローテーション削除 or 毎回削除（Drive転送成功時のみ）
+    storage_mode = os.environ.get("MODAL_STORAGE_MODE", "auto_5gb")
+    purge_now = (storage_mode == "purge_immediately") and bool(subfolder_id)
+    cleanup_storage_if_needed(
+        songs_root=Path("/root/songs"),
+        max_gb=5.0,
+        purge_immediately=purge_now,
+        current_subfolder=subfolder_name,
+    )
 
     # Discord への完了通知
     notify_discord(
