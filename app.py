@@ -145,23 +145,92 @@ def optimize_lyrics(raw_lyrics: str, max_line_len: int = 8) -> str:
     return "\n".join(optimized_lines)
 
 # ---------------------------------------------------------------------------
-# 4. 音声変換エンジン (FFmpeg: FLAC → 192kbps MP3)
+# 4. 音声変換・時間制御エンジン (FFmpeg: 最大2分58秒制限 & 192kbps MP3)
 # ---------------------------------------------------------------------------
-def convert_flac_to_mp3(flac_path: Path, mp3_path: Path, bitrate: str = "192k") -> bool:
+MAX_SONG_DURATION_SEC = 178.0  # 最大2分58秒 (178秒)
+
+def get_audio_duration(file_path: Path) -> float:
     """
-    FFmpeg を呼び出し、可逆圧縮 FLAC ファイルを 192kbps の高音質・軽量 MP3 ファイルへ変換します。
+    ffprobe を使用して音声ファイルの正確な長さ（秒数）を取得します。
+    """
+    try:
+        cmd = [
+            "ffprobe", "-v", "error",
+            "-show_entries", "format=duration",
+            "-of", "default=noprint_wrappers=1:nokey=1",
+            str(file_path),
+        ]
+        res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=True)
+        return float(res.stdout.strip())
+    except Exception as e:
+        print(f"[ffprobe 警告] 音声長の取得に失敗しました: {e}")
+        return 0.0
+
+
+def enforce_max_duration(input_path: Path, output_path: Path, max_sec: float = MAX_SONG_DURATION_SEC) -> bool:
+    """
+    音声が max_sec（2分58秒 = 178秒）を超えている場合、
+    終了前5秒間（173〜178秒）で自然にフェードアウトさせてきっかり178秒以内にトリミングします。
+    """
+    dur = get_audio_duration(input_path)
+    if dur <= 0:
+        return False
+
+    if dur > max_sec:
+        print(f"--- [時間制限] 音声長が {dur:.1f}秒 (制限: {max_sec:.0f}秒) のため、美しくフェードアウト・トリミングします ---")
+        fade_start = max_sec - 5.0
+        temp_trimmed = input_path.parent / f"trimmed_{input_path.name}"
+        cmd = [
+            "ffmpeg", "-y",
+            "-i", str(input_path),
+            "-to", str(max_sec),
+            "-af", f"afade=t=out:st={fade_start}:d=5.0",
+            str(temp_trimmed),
+        ]
+        try:
+            subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
+            shutil.move(temp_trimmed, output_path)
+            return True
+        except Exception as e:
+            print(f"[ffmpeg エラー] 時間トリミングに失敗しました: {e}")
+            if temp_trimmed.exists():
+                temp_trimmed.unlink()
+            return False
+    else:
+        if input_path != output_path:
+            shutil.copyfile(input_path, output_path)
+        return True
+
+
+def convert_flac_to_mp3(flac_path: Path, mp3_path: Path, bitrate: str = "192k", max_sec: float = MAX_SONG_DURATION_SEC) -> bool:
+    """
+    FFmpeg を呼び出し、可逆圧縮 FLAC を 192kbps の高音質・軽量 MP3 へ変換します。
+    万が一 178秒（2分58秒）を超える場合は、最後の5秒間で自然にフェードアウトさせて確実に2分58秒以内に収めます。
     """
     if not flac_path.exists():
         print(f"[FFmpeg エラー] 変換元FLACが見つかりません: {flac_path}")
         return False
     try:
-        cmd = [
-            "ffmpeg", "-y",
-            "-i", str(flac_path),
-            "-codec:a", "libmp3lame",
-            "-b:a", bitrate,
-            str(mp3_path),
-        ]
+        dur = get_audio_duration(flac_path)
+        if dur > max_sec:
+            fade_start = max_sec - 5.0
+            cmd = [
+                "ffmpeg", "-y",
+                "-i", str(flac_path),
+                "-to", str(max_sec),
+                "-af", f"afade=t=out:st={fade_start}:d=5.0",
+                "-codec:a", "libmp3lame",
+                "-b:a", bitrate,
+                str(mp3_path),
+            ]
+        else:
+            cmd = [
+                "ffmpeg", "-y",
+                "-i", str(flac_path),
+                "-codec:a", "libmp3lame",
+                "-b:a", bitrate,
+                str(mp3_path),
+            ]
         subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
         return True
     except Exception as e:
@@ -219,20 +288,59 @@ def generate_lyrics_and_style(theme_hint: str = "") -> dict:
         else:
             time_str = "深夜（静寂、内省的、チル、物思いに耽る時間）"
 
-        # ランダムなジャンル・ボーカルの組み合わせ候補
+        # 多彩なジャンル・音楽スタイルの候補プール（28種）
         genre_pool = [
-            "lo-fi hip hop chillout, warm Rhodes piano, vinyl crackle, 78 BPM",
-            "modern J-pop ballad, acoustic grand piano, emotional strings, 88 BPM",
-            "city pop, groovy slap bass, bright synth brass, funk guitar, 115 BPM",
-            "acoustic folk pop, gentle fingerpicking acoustic guitar, warm cello, 82 BPM",
-            "neo soul, smooth electric guitar chords, mellow bassline, relaxed beat, 85 BPM",
-            "chill synthwave, analog vintage synth pads, nostalgic melody, 95 BPM",
+            # J-Pop & J-Rock
+            "modern J-pop, energetic piano rock, driving bass, sparkling synth, emotional catchy melody, 132 BPM",
+            "modern J-pop ballad, grand acoustic piano, lush emotional strings, slow dramatic build-up, 86 BPM",
+            "J-rock, powerful overdriven electric guitar riff, punchy rock drums, anthemic soaring chorus, 142 BPM",
+            "pop punk, fast upbeat drums, crunchy power chords, youthful and catchy energetic melody, 148 BPM",
+            "anime opening style, epic soaring strings, fast synth arpeggio, intense rock rhythm, 150 BPM",
+            
+            # City Pop & Groove & Funk
+            "80s Japanese city pop, groovy slap bass, bright synth brass, funk guitar stabs, nostalgic Tokyo night, 116 BPM",
+            "nu-disco funk pop, rhythmic guitar grooves, warm analog synth bass, shimmering Rhodes, 122 BPM",
+            "future funk, vibrant filtered disco samples, punchy french house beat, upbeat and groovy, 126 BPM",
+            
+            # Lo-Fi & Chill & Neo Soul
+            "lo-fi hip hop chillout, warm Rhodes piano, gentle vinyl crackle, mellow bassline, relaxed beats, 78 BPM",
+            "bedroom pop, slightly detuned chorus guitar, cozy nostalgic lo-fi acoustic vibe, soft drums, 88 BPM",
+            "neo soul, rich jazzy guitar chords, deep smooth bassline, laid-back rimshot groove, 84 BPM",
+            "dream pop, ethereal reverb-drenched guitars, shimmering synth pads, floating celestial atmosphere, 96 BPM",
+            "shoegaze, wall of sound distorted fuzzy guitars, buried melodic dreaminess, hypnotic beat, 104 BPM",
+            
+            # Acoustic & Organic & World
+            "acoustic folk pop, warm fingerpicked acoustic guitar, subtle cello, organic hand percussion, 82 BPM",
+            "bossa nova cafe lounge, nylon-string acoustic guitar, gentle shaker, breezy flute, relaxed sunset, 102 BPM",
+            "country pop, lively acoustic strumming, pedal steel guitar hints, uplifting foot-stomping rhythm, 112 BPM",
+            "traditional Japanese modern pop, koto melody, shakuhachi accents, taiko drums with modern pop beat, 110 BPM",
+            "jazz pop ballad, walking double bass, muted trumpet solo, smoky piano chords, midnight cafe, 76 BPM",
+            
+            # Electronic & Dance
+            "melodic future bass, lush supersaw chords, sparkling vocal chops, bouncy trap beats, 138 BPM",
+            "tropical house, gentle marimba melody, plucky synths, breezy 4-on-the-floor beat, 118 BPM",
+            "synthwave retrowave, 80s analog synth arpeggio, gated reverb snare, neon highway driving, 112 BPM",
+            "electro swing, vintage brass big band horns, modern bouncy swing electronic drums, 124 BPM",
+            "ambient chillstep, deep sub bass, spacious atmospheric pads, slow hypnotic electronic rhythm, 70 BPM",
+            "eurobeat, blazing synth brass lead, high-energy pounding bass, relentless racing rhythm, 152 BPM",
+            
+            # R&B & Latin & Island
+            "contemporary R&B, modern 808 sub, seductive electric guitar licks, silky smooth beat, 90 BPM",
+            "reggae pop lovers rock, offbeat skank guitar, deep rolling reggae bass, tropical sunshine, 75 BPM",
+            "latin pop acoustic, rhythmic nylon guitar, congas and timbales, passionate romantic melody, 98 BPM",
+            "celtic folk pop, cheerful tin whistle, acoustic fiddle, driving bodhran rhythm, uplifting adventure, 118 BPM",
         ]
         vocal_pool = [
-            "Japanese female vocal, sweet and whispery voice",
-            "Japanese female vocal, clear and expressive emotional voice",
-            "Japanese male vocal, warm and gentle acoustic voice",
-            "Japanese female vocal, stylish and airy voice",
+            "Japanese female vocal, clear and expressive emotional voice with wide dynamic range",
+            "Japanese female vocal, sweet and gentle whispery voice, intimate close-mic feel",
+            "Japanese female vocal, powerful belting high-pitched voice, anthemic and passionate",
+            "Japanese female vocal, stylish airy voice, modern idol pop feel",
+            "Japanese female vocal, sultry and smoky jazz R&B voice, mature vibe",
+            "Japanese male vocal, warm and gentle acoustic voice, authentic storytelling tone",
+            "Japanese male vocal, emotional and gritty rock voice with passionate rasp",
+            "Japanese male vocal, smooth and soulful R&B falsetto and warm midrange",
+            "Japanese male vocal, youthful and breezy upbeat pop voice",
+            "Japanese female vocal, melancholic and fragile voice, deeply expressive",
         ]
 
         selected_genre = random.choice(genre_pool)
@@ -243,20 +351,35 @@ def generate_lyrics_and_style(theme_hint: str = "") -> dict:
 AI音楽生成モデル「YuE2」に投入するための、楽曲の「タイトル」「スタイルプロンプト（英語）」「日本語歌詞」「テーマ解説」を生成してください。
 
 【現在のシチュエーション】
-- 季節: {season_str}
+- 季節感: {season_str}
 - 時間帯: {time_str}
-- 推奨サウンドベース: {selected_genre}, {selected_vocal}
+- サウンドスタイル提案: {selected_genre}
+- ボーカル提案: {selected_vocal}
 {f'- ユーザー指定のテーマ・着想: {theme_hint}' if theme_hint else ''}
 
-【YuE2向け歌詞のルール】
-- セクションタグ（[Verse], [Chorus], [Outro]）を必ず含めること。
-- [Verse] は情景描写や日常の心理を描き、[Chorus] は感情のコアを高らかに歌い、[Outro] で静かに余韻を残すこと。
-- 各行は長すぎず、日本語として響きが美しく自然な言葉遣いにすること。
-- 生成時間は1〜2分程度を想定するため、各セクション2〜4行程度でコンパクトに構成すること。
+【楽曲の演奏時間（最重要制限）】
+- 楽曲の長さが『最大2分58秒（178秒以内・目標2分30秒〜2分58秒）』に収まるよう、歌詞の構成と長さを厳密に設計してください。
+- 短すぎず（1分台不可）、3分を超えない最適なボリュームにしてください。
+
+【YuE2向け歌詞のセクション構成ルール】
+以下の構成タグを必ずこの順序で使用してください：
+[Intro]       : 曲の世界観を示す短い言葉やハミング（1〜2行）
+[Verse 1]     : Aメロ①（情景や心理の描写、2〜3行）
+[Pre-Chorus]  : Bメロ①（サビへの助走・感情の高まり、2行）
+[Chorus]      : サビ①（感情のコア・最もキャッチーな主旋律、3〜4行）
+[Verse 2]     : Aメロ②（ストーリーの進展、2〜3行）
+[Chorus]      : サビ②（盛り上がり、3〜4行）
+[Outro]       : アウトロ（静かな余韻・フェードアウト、1〜2行）
+※3分を超えないよう [Bridge] や [Solo] などの過剰なセクションは追加しないでください。
+※全体の合計行数は 16〜22行 程度に収めてください。各行は日本語として美しく自然な言葉遣いにすること。
 
 【スタイルプロンプトのルール】
 - 英語で記述すること。
-- 'Japanese, ... vocal' を含め、楽器、テンポ（BPM）、ムードを具体的に指定すること。
+- 指定のサウンドスタイルとボーカルをベースにしつつ、楽器（ドラム、ベース、ピアノ、ギター等）、BPM（テンポ）、ムードを具体的に英語プロンプトに落とし込むこと。
+
+【タイトルのルール】
+- 英語またはローマ字の短いユニークな曲名（アンダースコア区切り、英数字のみ、例: starlight_runner, tokyo_dusk, velvet_highway）。
+- 特定の単語に偏らず、楽曲のテーマに応じたオリジナリティ溢れるタイトルにすること。
 """
         client = genai.Client(api_key=api_key)
         response = client.models.generate_content(
@@ -265,7 +388,7 @@ AI音楽生成モデル「YuE2」に投入するための、楽曲の「タイ�
             config=types.GenerateContentConfig(
                 response_mime_type="application/json",
                 response_schema=SongGenerationPlan,
-                temperature=0.75,
+                temperature=0.85,
             ),
         )
         plan_dict = json.loads(response.text)
@@ -274,10 +397,10 @@ AI音楽生成モデル「YuE2」に投入するための、楽曲の「タイ�
     except Exception as e:
         print(f"[Gemini 作詞エラー] API呼び出しに失敗したためフォールバックを使用: {e}")
         return {
-            "title": "fallback_melody",
-            "style_prompt": "Japanese, clear expressive female vocal, modern J-pop ballad, 90 BPM, piano, strings",
-            "theme_description": "心に寄り添うエモーショナルなJ-POPバラード",
-            "lyrics": "[Verse]\nビルの隙間から差し込む光が\n冷たいアスファルトを染めていく\n[Chorus]\n消えない痛みを抱えたままで\n僕らは次の朝へと走り出す\n[Outro]\n光の中へ",
+            "title": "starlight_voyage",
+            "style_prompt": "modern J-pop, energetic piano rock, driving bass, sparkling synth, emotional catchy melody, Japanese female vocal, clear and expressive, 132 BPM",
+            "theme_description": "星空の下を未来へ向かって駆け抜ける爽快でエモーショナルな王道J-POP",
+            "lyrics": "[Intro]\n光の中へ\n[Verse 1]\nビルの隙間から差し込む光が\n冷たいアスファルトを染めていく\n誰もいないホームで息を吸い込んだ\n[Pre-Chorus]\n戸惑いを風に乗せて\n昨日までの涙を拭う\n[Chorus]\n消えない痛みを抱えたままで\n僕らは次の朝へと走り出す\nどこまでも続く青空へ手を伸ばして\n信じた軌跡を抱きしめる\n[Verse 2]\nすれ違う影に怯えていた日々\nそれでも心は明日を呼んでいた\n[Chorus]\n消えない痛みを抱えたままで\n僕らは次の朝へと走り出す\nどこまでも続く青空へ手を伸ばして\n信じた軌跡を抱きしめる\n[Outro]\n光の向こうへ ずっと",
         }
 
 # ---------------------------------------------------------------------------
@@ -497,12 +620,14 @@ def generate_music_core(
         song = pipe(style=style_prompt, lyrics=optimized_lyrics, cot="full", seed=seed)
         song.save_artifacts(str(temp_out))
 
-    # 【新規】FLACから 192kbps MP3 への自動変換
+    # 【時間制御 & 音声変換】最大2分58秒 (178秒) 制限 & 192kbps MP3 への自動変換
     flac_file = temp_out / "audio.flac"
     mp3_file = temp_out / "audio.mp3"
     if flac_file.exists():
+        # 音声が2分58秒を超えている場合は末尾5秒で美しくフェードアウトさせてトリミング
+        enforce_max_duration(flac_file, flac_file, max_sec=MAX_SONG_DURATION_SEC)
         print(f"--- [FFmpeg] 192kbps MP3 へ変換中: {flac_file.name} ---")
-        if convert_flac_to_mp3(flac_file, mp3_file, bitrate="192k"):
+        if convert_flac_to_mp3(flac_file, mp3_file, bitrate="192k", max_sec=MAX_SONG_DURATION_SEC):
             print(f"--- [FFmpeg] MP3 変換完了: {mp3_file.name} (サイズ: {mp3_file.stat().st_size / 1024 / 1024:.2f} MB) ---")
 
     # Modal Volume への永続保存

@@ -1,6 +1,6 @@
 # YuE2 × Modal クラウド楽曲自動生成パイプライン
 
-オープンソース最先端のAI音楽生成モデル「**YuE2 (3B)**」を、サーバーレスGPU基盤「**Modal**」上で稼働させ、**定期自動生成（Cron）**、**Google Drive自動保存（FLAC & 192kbps MP3）**、**Geminiによる自律作詞**、**Discord完了通知**、そして **Web/スマホからのオンデマンド生成** を完全クラウド完結（ローカルGPU・常時電源不要）で実現するパイプラインシステムです。
+オープンソース最先端のAI音楽生成モデル「**YuE2 (3B)**」を、サーバーレスGPU基盤「**Modal**」上で稼働させ、**定期自動生成（Cron）**、**Google Drive自動保存（FLAC & 192kbps MP3）**、**Geminiによる多ジャンル自律作詞（最大2分58秒本格構成）**、**Discord完了通知**、そして **Web/スマホからのオンデマンド生成** を完全クラウド完結（ローカルGPU・常時電源不要）で実現するパイプラインシステムです。
 
 ---
 
@@ -15,23 +15,26 @@
 ## 🌟 主な特徴
 
 1. **サーバーレスGPU推論（常時コストゼロ）**
-   - NVIDIA L4（24GB VRAM）を推論時のみ動的確保（1曲あたり約2分、約4円〜8円）。
+   - NVIDIA L4（24GB VRAM）を推論時のみ動的確保（1曲あたり約2〜3分、約5円〜8円）。
    - 待機費用は一切発生せず、Modalの月額$30無料クレジット枠内で完全運用可能。
-2. **LLM自律作詞・スタイルプロンプト生成（Gemini API）**
-   - 季節（春夏秋冬）、現在の時間帯（朝・昼・夕・深夜）、ランダムな音楽要素に応じた「タイトル・YuE2用スタイルプロンプト・日本語歌詞」をGemini 3.8 Flashが自律生成。
-   - 完全放置の定期実行（Cron）でも、常に旬でバリエーション豊かな新曲がストックされます。
-3. **日本語歌詞の自動最適化エンジン (`pykakasi`)**
+2. **多ジャンル自律作詞 ＆ 本格7セクション構成（Gemini API）**
+   - **28種以上の多彩なジャンル**（J-Pop、City Pop、J-Rock、Lo-Fi、Neo Soul、Future Bass、ボサノバ、和風ポップ、レゲエ、ユーロビート等）× **10種のボーカル表現** を自律サンプリング。
+   - `[Intro]`, `[Verse 1]`, `[Pre-Chorus]`, `[Chorus]`, `[Verse 2]`, `[Chorus]`, `[Outro]` の王道構成により、聴き応えのある豊かな展開を実現。
+3. **最大2分58秒（178秒）厳格時間制御（FFmpeg フェードアウト保証）**
+   - 曲の長さが「**最大2分58秒（178秒以内）**」に収まるよう歌詞ボリュームを最適設計。
+   - 万が一178秒を超えた場合でも、終了前5秒間（173〜178秒）で自然にフェードアウトさせて確実に2分58秒以内で美しく終了。
+4. **日本語歌詞の自動最適化エンジン (`pykakasi`)**
    - 漢字混じり・長文の歌詞を、GPU投入直前に「ひらがな・分かち書き・1行5〜8文字」へ自動整形。
    - ABC楽譜（音符）とモーラ（拍数）の1対1対応を強制し、音節崩れによるハルシネーションを防止。
-4. **高音質 192kbps MP3 自動変換 & Google Drive `mp3` フォルダ集約保存**
+5. **高音質 192kbps MP3 自動変換 & Google Drive `mp3` フォルダ集約保存**
    - 生成された可逆圧縮 FLAC 音源を FFmpeg で 192kbps MP3 へ自動変換（ファイル容量を約 1/10 に圧縮）。
    - 各曲の個別フォルダ（`yue2/曲名_日時/`）に加えて、共有フォルダ（`yue2/mp3/`）にも自動配置。
    - Google Drive 上で全曲の MP3 が一覧化され、スマートフォン等からの連続再生・ストリーミング試聴が極めて快適になります。
-5. **Google Drive 自動バックアップ（OAuth 2.0 連携）**
+6. **Google Drive 自動バックアップ（OAuth 2.0 連携）**
    - 個人アカウントの空き容量を直接利用し、生成完了後にFLAC音源、MP3音源、ABC楽譜、生成ログを専用フォルダ（`yue2`）へ自動転送。
-6. **Discord Webhook リッチ完了通知**
+7. **Discord Webhook リッチ完了通知**
    - 楽曲生成とDriveアップロードが完了すると、Discordチャンネルへ試聴リンク・歌詞プレビュー・スタイル設定付きのEmbedカードを即座に送信。
-7. **完全クラウド完結のトリプル・トリガー ＆ バッチ同期**
+8. **完全クラウド完結のトリプル・トリガー ＆ バッチ同期**
    - **Web UI (ASGI / FastAPI)**: スマホ・ブラウザ対応のレスポンシブ画面。「AIにおまかせ生成」と「自由作詞生成」をタブで切り替え可能。
    - **定時バッチ生成 (Modal Cron)**: 2時間毎（偶数時の0分）に完全自動でAI作詞から生成・Drive保存・通知まで一括実行。
    - **日次MP3一括同期バッチ (Modal Cron)**: 毎日深夜（JST 24:00）に未変換のFLACを自動スキャンし、MP3化してDriveへ同期。
@@ -49,7 +52,7 @@
 | **Phase 1** | **基盤構築 & プロトタイプ検証** | Modalアカウント連携、NVIDIA L4動作確認、YuE2-3BによるFLAC/ABC生成成功、モデルVolumeキャッシュ | ✅ **完了** |
 | **Phase 2** | **クラウド完結化 & 歌詞最適化** | FastAPI Web UI、Cron週次定期実行、日本語歌詞最適化エンジン（pykakasi） | ✅ **完了** |
 | **Phase 3** | **Google Drive 自動連携** | OAuth 2.0 個人権限連携、yue2フォルダへの自動同期（音源・楽譜・ログ） | ✅ **完了** |
-| **Phase 4** | **定期自動実行の高度化 & 通知・MP3集約** | Gemini自律作詞エンジン、2時間毎Cron生成、Discord通知、192kbps MP3変換 & Drive集約保存、日次一括同期 | ✅ **完了** |
+| **Phase 4** | **定期実行の高度化 & 多ジャンル展開・MP3集約** | Gemini自律作詞（28種以上ジャンル・王道7セクション構成）、最大2分58秒制限、2時間毎Cron生成、Discord通知、192kbps MP3変換 & Drive集約保存、日次一括同期 | ✅ **完了** |
 | **Phase 5** | **マルチメディア展開 & 収益化** | 正方形ジャケット画像自動生成、リリック動画（MP4）自動生成（YouTube統合）、配信フロー確立 | 📋 **計画中** |
 
 ---
@@ -58,12 +61,12 @@
 
 ```text
 yue2_modal/
-├── app.py              # パイプライン本体（L4推論, Web UI, Cron, 歌詞最適化, MP3変換, Drive同期, Discord通知）
+├── app.py              # パイプライン本体（L4推論, Web UI, Cron, 歌詞最適化, 時間制限, MP3変換, Drive同期, Discord通知）
 ├── test_drive.py       # Google Drive 接続診断スクリプト（CPU・数秒で動作）
 ├── test_mp3_sync.py    # Google Drive mp3 フォルダ疎通確認スクリプト（CPU・数秒で動作）
 ├── test_modal_gemini.py# Gemini API 自律作詞のクラウド動作確認スクリプト
 ├── test_discord.py     # Discord Webhook 通知の疎通確認スクリプト
-├── test_gemini.py      # ローカル用 Gemini 作成検証スクリプト
+├── test_gemini.py      # ローカル用 Gemini 作成検証スクリプト（新プロンプト・多ジャンル対応）
 ├── test_gpu.py         # GPU単体動作検証スクリプト
 ├── ROADMAP.md          # プロジェクト詳細ロードマップ
 ├── README.md           # 本仕様書・ドキュメント
@@ -103,8 +106,8 @@ modal run test_drive.py
 # Google Drive mp3 フォルダ連携テスト
 modal run test_mp3_sync.py
 
-# Gemini 自律作詞テスト
-modal run test_modal_gemini.py
+# Gemini 自律作詞テスト（多ジャンル＆2分58秒設計）
+python test_gemini.py
 
 # Discord 通知テスト
 modal run test_discord.py
@@ -132,10 +135,10 @@ modal run app.py::sync_flac_to_mp3_batch
 ### 5. ローカルCLIからの直接テスト実行
 ```bash
 # AIにおまかせで自律作詞して生成
-modal run app.py --auto-ai --theme "秋の雨上がりの夜"
+modal run app.py --auto-ai --theme "星空のハイウェイ"
 
 # 歌詞・スタイルを手動指定して生成
-modal run app.py --title "my_song" --style "Japanese, female vocal, lo-fi hip hop, 80 BPM"
+modal run app.py --title "my_song" --style "Japanese, female vocal, 80s city pop, 116 BPM"
 ```
 
 ### 6. クラウド保存曲の手元ダウンロード
@@ -152,5 +155,6 @@ modal volume get yue2-generated-songs / outputs_cloud/
 ## 🔒 コストと安全設計
 
 - **厳格なタイムアウト管理**: GPU関数に `timeout=600`（10分）を設定し、プロセススタックによる過剰課金を完全に防止。
-- **GPU時間の最小化**: LLMによる作詞（Gemini）、MP3変換（FFmpeg）、日次バッチ同期、Discord通知はすべて安価なCPUコンテナ上で完結させてからGPUを起動するため、高価なL4 GPU課金時間を1秒も無駄にしません。
+- **2分58秒厳格トリミング**: 全ての音声（FLAC / MP3）が確実に178秒以内で自然にフェードアウト終了。
+- **GPU時間の最小化**: LLMによる作詞（Gemini）、時間トリミング・MP3変換（FFmpeg）、日次バッチ同期、Discord通知はすべて安価なCPUコンテナ上で完結させてからGPUを起動するため、高価なL4 GPU課金時間を1秒も無駄にしません。
 - **秘密情報の分離保護**: Google認証トークン、Gemini APIキー、Discord Webhookはすべて `modal.Secret` で暗号化管理され、コード内やGitには一切含まれません。
