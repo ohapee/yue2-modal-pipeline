@@ -260,8 +260,11 @@ def generate_cover_art(
         client = genai.Client(api_key=api_key)
 
         image_prompt = (
-            f"Album cover art, anime aesthetic or cinematic photo, masterpiece, vibrant lighting, "
-            f"theme: {theme_description}, style: {style_prompt}, square 1:1 aspect ratio, high resolution, no text"
+            f"Photorealistic cinematic photograph, professional 35mm film photography, authentic realistic photo, "
+            f"natural lighting, exquisite depth of field, real life authentic scene, award-winning album cover art. "
+            f"Scene and Mood: {theme_description}, Musical Style: {style_prompt}. "
+            f"Square 1:1 aspect ratio, ultra-detailed, highly realistic, masterpiece. "
+            f"DO NOT include any anime, cartoon, illustration, drawing, CGI, 3D render, watermark, or text."
         )
         print(f"--- [Gemini] ジャケット画像生成中: {title} ---")
         response = client.models.generate_content(
