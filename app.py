@@ -145,9 +145,8 @@ def optimize_lyrics(raw_lyrics: str, max_line_len: int = 8) -> str:
     return "\n".join(optimized_lines)
 
 # ---------------------------------------------------------------------------
-# 4. 音声変換・時間制御エンジン (FFmpeg: 最大2分58秒制限 & 192kbps MP3)
+# 4. 音声変換エンジン (FFmpeg: 192kbps MP3変換)
 # ---------------------------------------------------------------------------
-MAX_SONG_DURATION_SEC = 178.0  # 最大2分58秒 (178秒)
 
 def get_audio_duration(file_path: Path) -> float:
     """
@@ -167,7 +166,7 @@ def get_audio_duration(file_path: Path) -> float:
         return 0.0
 
 
-def enforce_max_duration(input_path: Path, output_path: Path, max_sec: float = MAX_SONG_DURATION_SEC) -> bool:
+def enforce_max_duration(input_path: Path, output_path: Path, max_sec: float = 178.0) -> bool:
     """
     音声が max_sec（2分58秒 = 178秒）を超えている場合、
     終了前5秒間（173〜178秒）で自然にフェードアウトさせてきっかり178秒以内にトリミングします。
@@ -202,35 +201,21 @@ def enforce_max_duration(input_path: Path, output_path: Path, max_sec: float = M
         return True
 
 
-def convert_flac_to_mp3(flac_path: Path, mp3_path: Path, bitrate: str = "192k", max_sec: float = MAX_SONG_DURATION_SEC) -> bool:
+def convert_flac_to_mp3(flac_path: Path, mp3_path: Path, bitrate: str = "192k") -> bool:
     """
-    FFmpeg を呼び出し、可逆圧縮 FLAC を 192kbps の高音質・軽量 MP3 へ変換します。
-    万が一 178秒（2分58秒）を超える場合は、最後の5秒間で自然にフェードアウトさせて確実に2分58秒以内に収めます。
+    FFmpeg を呼び出し、可逆圧縮 FLAC を 192kbps の高音質・軽量 MP3 へ全編そのまま変換します。
     """
     if not flac_path.exists():
         print(f"[FFmpeg エラー] 変換元FLACが見つかりません: {flac_path}")
         return False
     try:
-        dur = get_audio_duration(flac_path)
-        if dur > max_sec:
-            fade_start = max_sec - 5.0
-            cmd = [
-                "ffmpeg", "-y",
-                "-i", str(flac_path),
-                "-to", str(max_sec),
-                "-af", f"afade=t=out:st={fade_start}:d=5.0",
-                "-codec:a", "libmp3lame",
-                "-b:a", bitrate,
-                str(mp3_path),
-            ]
-        else:
-            cmd = [
-                "ffmpeg", "-y",
-                "-i", str(flac_path),
-                "-codec:a", "libmp3lame",
-                "-b:a", bitrate,
-                str(mp3_path),
-            ]
+        cmd = [
+            "ffmpeg", "-y",
+            "-i", str(flac_path),
+            "-codec:a", "libmp3lame",
+            "-b:a", bitrate,
+            str(mp3_path),
+        ]
         subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
         return True
     except Exception as e:
@@ -507,21 +492,12 @@ AI音楽生成モデル「YuE2」に投入するための、楽曲の「タイ�
 - 季節や時間帯を勝手に「秋」や「深夜」に固定することは絶対に禁止です。指定されたテーマ（夏、冬、春、サイバーパンク、日常、フェス等）に完璧に一致させて作詞してください。
 - タイトルや歌詞に「amber」「琥珀」「秋」「autumn」などの単語を安易に使い回すことは厳禁です。曲ごとに全く異なる新鮮で魅力的な言葉を選んでください。
 
-【楽曲の演奏時間（最重要制限）】
-- 楽曲の長さが『最大2分58秒（178秒以内・目標2分30秒〜2分58秒）』に収まるよう、歌詞の構成と長さを厳密に設計してください。
-- 短すぎず（1分台不可）、3分を超えない最適なボリュームにしてください。
-
 【YuE2向け歌詞のセクション構成ルール】
-以下の構成タグを必ずこの順序で使用してください：
-[Intro]       : 曲の世界観を示す短い言葉やハミング（1〜2行）
-[Verse 1]     : Aメロ①（情景や心理の描写、2〜3行）
-[Pre-Chorus]  : Bメロ①（サビへの助走・感情の高まり、2行）
-[Chorus]      : サビ①（感情のコア・最もキャッチーな主旋律、3〜4行）
-[Verse 2]     : Aメロ②（ストーリーの進展、2〜3行）
-[Chorus]      : サビ②（盛り上がり、3〜4行）
-[Outro]       : アウトロ（静かな余韻・フェードアウト、1〜2行）
-※3分を超えないよう [Bridge] や [Solo] などの過剰なセクションは追加しないでください。
-※全体の合計行数は 16〜22行 程度に収めてください。各行は日本語として美しく自然な言葉遣いにすること。
+楽曲の世界観やストーリー展開に合わせて、自然な音楽構成で歌詞を作成してください。
+以下の構成タグを適切な順序で使用してください：
+[Intro], [Verse 1], [Pre-Chorus], [Chorus], [Verse 2], [Bridge]（任意）, [Chorus], [Outro]
+- 感情の起伏やドラマチックな盛り上がりを大切に、聴き応えのある1曲に仕上げてください。
+- 各行は日本語として美しく自然な言葉遣いにすること。
 
 【スタイルプロンプトのルール】
 - 英語で記述すること。
@@ -891,14 +867,12 @@ def generate_music_core(
         song = pipe(style=style_prompt, lyrics=optimized_lyrics, cot="full", seed=seed)
         song.save_artifacts(str(temp_out))
 
-    # 【時間制御 & 音声変換】最大2分58秒 (178秒) 制限 & 192kbps MP3 への自動変換
+    # 【音声変換】可逆圧縮 FLAC から 192kbps MP3 へ全編そのまま変換
     flac_file = temp_out / "audio.flac"
     mp3_file = temp_out / "audio.mp3"
     if flac_file.exists():
-        # 音声が2分58秒を超えている場合は末尾5秒で美しくフェードアウトさせてトリミング
-        enforce_max_duration(flac_file, flac_file, max_sec=MAX_SONG_DURATION_SEC)
-        print(f"--- [FFmpeg] 192kbps MP3 へ変換中: {flac_file.name} ---")
-        if convert_flac_to_mp3(flac_file, mp3_file, bitrate="192k", max_sec=MAX_SONG_DURATION_SEC):
+        print(f"--- [FFmpeg] 192kbps MP3 へ全編変換中: {flac_file.name} ---")
+        if convert_flac_to_mp3(flac_file, mp3_file, bitrate="192k"):
             print(f"--- [FFmpeg] MP3 変換完了: {mp3_file.name} (サイズ: {mp3_file.stat().st_size / 1024 / 1024:.2f} MB) ---")
 
     # 【マルチメディア展開】ジャケット画像 (3000x3000px) ＆ ビジュアライザー動画 (1080p MP4) の自動生成
