@@ -1,0 +1,1562 @@
+<!DOCTYPE html>
+<html lang="ja" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>YuE2 Studio Manager - 楽曲管理ダッシュボード</title>
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Lucide Icons -->
+  <script src="https://unpkg.com/lucide@latest"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            brand: {
+              50: '#ecfeff',
+              400: '#22d3ee',
+              500: '#06b6d4',
+              600: '#0891b2',
+            },
+            accent: {
+              400: '#34d399',
+              500: '#10b981',
+            }
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    /* カスタムスクロールバー */
+    ::-webkit-scrollbar { width: 8px; height: 8px; }
+    ::-webkit-scrollbar-track { background: #0f172a; }
+    ::-webkit-scrollbar-thumb { background: #334155; border-radius: 4px; }
+    ::-webkit-scrollbar-thumb:hover { background: #475569; }
+  </style>
+</head>
+<body class="bg-slate-950 text-slate-100 min-h-screen pb-32 flex flex-col font-sans select-none">
+
+  <!-- ===================================================================== -->
+  <!-- トップナビゲーションバー -->
+  <!-- ===================================================================== -->
+  <header class="sticky top-0 z-30 bg-slate-900/90 backdrop-blur-md border-b border-slate-800 px-4 lg:px-8 py-3.5">
+    <div class="max-w-7xl mx-auto flex flex-wrap items-center justify-between gap-4">
+      
+      <!-- ロゴ & 状態 -->
+      <div class="flex items-center gap-3">
+        <div class="w-10 h-10 rounded-xl bg-gradient-to-tr from-cyan-500 to-emerald-500 flex items-center justify-center shadow-lg shadow-cyan-500/20">
+          <i data-lucide="disc-3" class="w-6 h-6 text-white animate-spin-slow"></i>
+        </div>
+        <div>
+          <h1 class="text-lg font-bold tracking-tight text-white flex items-center gap-2">
+            YuE2 Studio Manager
+            <span class="text-xs font-medium px-2 py-0.5 rounded-full bg-cyan-950 text-cyan-400 border border-cyan-800">Local Test</span>
+          </h1>
+          <p id="drive-status-badge" class="text-xs text-slate-400 flex items-center gap-1.5">
+            <span class="w-2 h-2 rounded-full bg-amber-400 animate-pulse"></span> 接続確認中...
+          </p>
+        </div>
+      </div>
+
+      <!-- リアルタイム検索バー -->
+      <div class="flex-1 max-w-md min-w-[260px]">
+        <div class="relative">
+          <i data-lucide="search" class="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2"></i>
+          <input 
+            type="text" 
+            id="search-input"
+            placeholder="曲名、スタイル（City Pop, J-Rock...）、歌詞で検索" 
+            class="w-full bg-slate-800/80 hover:bg-slate-800 focus:bg-slate-900 border border-slate-700 focus:border-cyan-500 rounded-xl pl-10 pr-9 py-2 text-sm text-slate-100 placeholder-slate-400 focus:outline-none transition"
+          >
+          <button id="search-clear-btn" class="hidden absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-200">
+            <i data-lucide="x" class="w-4 h-4"></i>
+          </button>
+        </div>
+      </div>
+
+      <!-- アクションボタン群 -->
+      <div class="flex items-center gap-2">
+        <button id="batch-dl-btn" disabled class="disabled:opacity-40 disabled:cursor-not-allowed px-3.5 py-2 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white text-xs font-semibold flex items-center gap-1.5 shadow-md transition">
+          <i data-lucide="download" class="w-4 h-4"></i>
+          <span id="batch-dl-label">一括DL</span>
+        </button>
+
+        <button id="refresh-btn" class="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 hover:border-slate-600 text-xs font-medium flex items-center gap-1.5 transition" title="Google Drive と再同期">
+          <i data-lucide="refresh-cw" class="w-4 h-4" id="refresh-icon"></i>
+          <span class="hidden sm:inline">再同期</span>
+        </button>
+
+        <button id="settings-btn" class="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 hover:border-slate-600 text-xs font-medium transition" title="設定・情報">
+          <i data-lucide="settings" class="w-4 h-4"></i>
+        </button>
+      </div>
+
+    </div>
+  </header>
+
+  <!-- ===================================================================== -->
+  <!-- リアルタイム同期プログレスバー -->
+  <!-- ===================================================================== -->
+  <div id="sync-progress-banner" class="hidden bg-slate-900 border-b border-cyan-500/30 px-4 py-3 text-xs shadow-lg transition-all">
+    <div class="max-w-7xl mx-auto space-y-2">
+      <div class="flex items-center justify-between text-slate-200">
+        <span class="flex items-center gap-2 font-semibold">
+          <i data-lucide="loader-2" class="w-4 h-4 text-cyan-400 animate-spin"></i>
+          <span id="sync-progress-message">Google Drive をスキャン中...</span>
+        </span>
+        <span id="sync-progress-percent" class="font-mono text-cyan-400 font-bold text-sm">0%</span>
+      </div>
+      <div class="w-full h-2 bg-slate-950 rounded-full overflow-hidden border border-slate-800">
+        <div id="sync-progress-bar" class="h-full bg-gradient-to-r from-cyan-500 via-teal-400 to-emerald-400 rounded-full w-0 transition-all duration-300"></div>
+      </div>
+      <div class="flex items-center justify-between text-[11px] text-slate-400">
+        <span id="sync-progress-detail" class="truncate max-w-lg">準備中...</span>
+        <span id="sync-progress-counts">0 / 0 曲</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===================================================================== -->
+  <!-- デモモード案内バナー (Drive未接続時のみ表示) -->
+  <!-- ===================================================================== -->
+  <div id="demo-banner" class="hidden bg-amber-950/40 border-b border-amber-800/60 px-4 py-2.5 text-xs text-amber-200">
+    <div class="max-w-7xl mx-auto flex items-center justify-between gap-4">
+      <div class="flex items-center gap-2">
+        <i data-lucide="alert-triangle" class="w-4 h-4 text-amber-400 shrink-0"></i>
+        <span>現在<strong>デモモード</strong>で動作しています（Google Drive認証未設定）。サンプル楽曲データでUIやプレイヤーの動作を確認できます。</span>
+      </div>
+      <button onclick="openSettingsModal()" class="text-amber-400 underline hover:text-amber-300 font-semibold shrink-0">設定方法を見る</button>
+    </div>
+  </div>
+
+  <!-- ===================================================================== -->
+  <!-- メインコンテンツ -->
+  <!-- ===================================================================== -->
+  <main class="max-w-7xl mx-auto px-4 lg:px-8 pt-6 pb-12 flex-1 w-full">
+    
+    <!-- ===================================================================== -->
+    <!-- 統計・インサイト & クイック絞り込みパネル -->
+    <!-- ===================================================================== -->
+    <div class="mb-6 rounded-2xl bg-slate-900/70 border border-slate-800/80 overflow-hidden shadow-xl transition-all">
+      <!-- パネルヘッダー (折りたたみトグル) -->
+      <div class="px-5 py-3.5 bg-slate-900 border-b border-slate-800 flex items-center justify-between cursor-pointer select-none" onclick="toggleStatsPanel()">
+        <div class="flex items-center gap-2.5">
+          <div class="w-7 h-7 rounded-lg bg-cyan-500/10 border border-cyan-500/30 flex items-center justify-center text-cyan-400">
+            <i data-lucide="bar-chart-2" class="w-4 h-4"></i>
+          </div>
+          <div>
+            <h2 class="text-sm font-bold text-white flex items-center gap-2">
+              楽曲ライブラリ統計 ＆ インサイト絞り込み
+              <span id="stats-summary-pill" class="text-[11px] font-normal px-2.5 py-0.5 rounded-full bg-slate-800 text-slate-300">集計中...</span>
+            </h2>
+          </div>
+        </div>
+        <div class="flex items-center gap-2 text-xs text-slate-400 hover:text-slate-200">
+          <span id="stats-toggle-text">閉じる</span>
+          <i data-lucide="chevron-up" class="w-4 h-4 transition-transform duration-300" id="stats-toggle-icon"></i>
+        </div>
+      </div>
+
+      <!-- パネル本体 -->
+      <div id="stats-panel-body" class="p-5 space-y-4">
+        <!-- 4つのサマリーカード -->
+        <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
+          <div class="p-3.5 rounded-xl bg-slate-950/60 border border-slate-800/60">
+            <div class="text-[11px] text-slate-400 flex items-center gap-1.5 mb-1">
+              <i data-lucide="music" class="w-3.5 h-3.5 text-cyan-400"></i> 登録楽曲総数
+            </div>
+            <div class="text-xl font-bold text-white"><span id="stat-total-songs">-</span> <span class="text-xs font-normal text-slate-500">曲</span></div>
+          </div>
+          <div class="p-3.5 rounded-xl bg-slate-950/60 border border-slate-800/60">
+            <div class="text-[11px] text-slate-400 flex items-center gap-1.5 mb-1">
+              <i data-lucide="film" class="w-3.5 h-3.5 text-pink-400"></i> フルHD動画
+            </div>
+            <div class="text-xl font-bold text-pink-400"><span id="stat-with-video">-</span> <span class="text-xs font-normal text-slate-500">本</span></div>
+          </div>
+          <div class="p-3.5 rounded-xl bg-slate-950/60 border border-slate-800/60">
+            <div class="text-[11px] text-slate-400 flex items-center gap-1.5 mb-1">
+              <i data-lucide="activity" class="w-3.5 h-3.5 text-emerald-400"></i> 平均テンポ
+            </div>
+            <div class="text-xl font-bold text-emerald-400"><span id="stat-avg-bpm">-</span> <span class="text-xs font-normal text-slate-500">BPM</span></div>
+          </div>
+          <div class="p-3.5 rounded-xl bg-slate-950/60 border border-slate-800/60">
+            <div class="text-[11px] text-slate-400 flex items-center gap-1.5 mb-1">
+              <i data-lucide="hard-drive" class="w-3.5 h-3.5 text-purple-400"></i> 総データ容量
+            </div>
+            <div class="text-xl font-bold text-purple-400"><span id="stat-total-size">-</span> <span class="text-xs font-normal text-slate-500">MB</span></div>
+          </div>
+        </div>
+
+        <!-- ジャンルタグ一覧 -->
+        <div>
+          <div class="text-xs font-semibold text-slate-300 mb-2 flex items-center justify-between">
+            <span class="flex items-center gap-1.5">
+              <i data-lucide="disc" class="w-3.5 h-3.5 text-cyan-400"></i> スタイル / ジャンルで絞り込み
+            </span>
+            <span class="text-[11px] text-slate-500">クリックで即時フィルタ</span>
+          </div>
+          <div id="genre-chips-container" class="flex flex-wrap gap-1.5">
+            <span class="text-xs text-slate-500">読み込み中...</span>
+          </div>
+        </div>
+
+        <!-- 雰囲気・ムードタグ一覧 -->
+        <div>
+          <div class="text-xs font-semibold text-slate-300 mb-2 flex items-center justify-between">
+            <span class="flex items-center gap-1.5">
+              <i data-lucide="sparkles" class="w-3.5 h-3.5 text-amber-400"></i> 曲の雰囲気・ムードで絞り込み
+            </span>
+            <span class="text-[11px] text-slate-500">世界観・テーマから抽出</span>
+          </div>
+          <div id="mood-chips-container" class="flex flex-wrap gap-1.5">
+            <span class="text-xs text-slate-500">読み込み中...</span>
+          </div>
+        </div>
+
+        <!-- ボーカル & テンポ フィルタ -->
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4 pt-1 border-t border-slate-800/60">
+          <div>
+            <div class="text-xs font-semibold text-slate-300 mb-2 flex items-center gap-1.5">
+              <i data-lucide="mic-2" class="w-3.5 h-3.5 text-emerald-400"></i> ボーカル構成
+            </div>
+            <div id="vocal-chips-container" class="flex flex-wrap gap-1.5"></div>
+          </div>
+          <div>
+            <div class="text-xs font-semibold text-slate-300 mb-2 flex items-center gap-1.5">
+              <i data-lucide="gauge" class="w-3.5 h-3.5 text-teal-400"></i> テンポ（BPM）範囲
+            </div>
+            <div id="bpm-chips-container" class="flex flex-wrap gap-1.5"></div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- アクティブフィルター表示バー (何か絞り込まれている時のみ表示) -->
+    <div id="active-filters-bar" class="hidden mb-4 p-2.5 rounded-xl bg-cyan-950/40 border border-cyan-800/50 flex flex-wrap items-center justify-between gap-2 text-xs shadow-md">
+      <div class="flex flex-wrap items-center gap-2">
+        <span class="text-slate-300 text-[11px] font-medium flex items-center gap-1">
+          <i data-lucide="filter" class="w-3.5 h-3.5 text-cyan-400"></i> 適用中の絞り込み:
+        </span>
+        <div id="active-filter-chips" class="flex flex-wrap items-center gap-1.5"></div>
+      </div>
+      <button onclick="clearAllFilters()" class="text-cyan-400 hover:text-cyan-300 underline font-semibold text-[11px] px-2 py-0.5">
+        条件をすべてクリア
+      </button>
+    </div>
+
+    <!-- フィルタ・タブ & カウント -->
+    <div class="flex flex-wrap items-center justify-between gap-4 mb-6">
+      
+      <!-- フィルタタブ -->
+      <div class="flex items-center bg-slate-900 border border-slate-800 rounded-xl p-1 text-xs font-medium">
+        <button id="tab-all" onclick="setFilter('all')" class="tab-btn px-4 py-1.5 rounded-lg bg-cyan-600 text-white font-semibold transition">
+          全楽曲 (<span id="count-all">0</span>)
+        </button>
+        <button id="tab-favorites" onclick="setFilter('favorites')" class="tab-btn px-4 py-1.5 rounded-lg text-slate-400 hover:text-slate-200 transition">
+          お気に入り★ (<span id="count-fav">0</span>)
+        </button>
+        <button id="tab-video" onclick="setFilter('video')" class="tab-btn px-4 py-1.5 rounded-lg text-slate-400 hover:text-slate-200 transition">
+          動画あり (<span id="count-video">0</span>)
+        </button>
+      </div>
+
+      <!-- ソート & 一括選択 -->
+      <div class="flex items-center gap-3 text-xs text-slate-400">
+        <label class="flex items-center gap-1.5 cursor-pointer hover:text-slate-200">
+          <input type="checkbox" id="select-all-checkbox" class="w-4 h-4 rounded border-slate-700 text-cyan-600 focus:ring-0 bg-slate-800">
+          <span>すべて選択</span>
+        </label>
+        <span class="text-slate-700">|</span>
+        <select id="sort-select" class="bg-slate-900 border border-slate-800 rounded-lg px-2.5 py-1.5 text-slate-200 focus:outline-none focus:border-cyan-500">
+          <option value="newest">新しい順</option>
+          <option value="oldest">古い順</option>
+          <option value="title">曲名順</option>
+        </select>
+      </div>
+
+    </div>
+
+    <!-- 楽曲リストコンテナ -->
+    <div id="songs-container" class="space-y-3">
+      <!-- ローディングスピナー -->
+      <div id="loading-spinner" class="py-20 text-center text-slate-400">
+        <i data-lucide="loader-2" class="w-8 h-8 mx-auto mb-3 animate-spin text-cyan-400"></i>
+        <p class="text-sm">楽曲データを読み込んでいます...</p>
+      </div>
+    </div>
+
+    <!-- 0件ヒット時の表示 -->
+    <div id="empty-state" class="hidden py-24 text-center">
+      <div class="w-16 h-16 rounded-2xl bg-slate-900 border border-slate-800 flex items-center justify-center mx-auto mb-4 text-slate-500">
+        <i data-lucide="music-2" class="w-8 h-8"></i>
+      </div>
+      <h3 class="text-base font-semibold text-slate-300">該当する楽曲が見つかりませんでした</h3>
+      <p class="text-xs text-slate-500 mt-1">検索条件を変更するか、再同期をお試しください。</p>
+    </div>
+
+  </main>
+
+  <!-- ===================================================================== -->
+  <!-- 常駐下部オーディオプレイヤー -->
+  <!-- ===================================================================== -->
+  <footer id="bottom-player" class="fixed bottom-0 left-0 right-0 z-40 bg-slate-900/95 backdrop-blur-lg border-t border-slate-800 px-4 lg:px-8 py-3 transition-transform duration-300 shadow-2xl">
+    <div class="max-w-7xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-3 sm:gap-6">
+      
+      <!-- 再生中の曲情報 -->
+      <div class="flex items-center gap-3 w-full sm:w-1/4 min-w-[200px]">
+        <div class="relative group cursor-pointer" onclick="openCurrentCoverModal()">
+          <img id="player-cover" src="https://images.unsplash.com/photo-1518709268805-4e9042af9f23?w=100&h=100&fit=crop" class="w-12 h-12 rounded-lg object-cover shadow border border-slate-700 bg-slate-800" alt="Cover">
+          <div class="absolute inset-0 bg-black/40 rounded-lg opacity-0 group-hover:opacity-100 flex items-center justify-center transition">
+            <i data-lucide="maximize-2" class="w-4 h-4 text-white"></i>
+          </div>
+        </div>
+        <div class="overflow-hidden flex-1">
+          <div class="flex items-center gap-2">
+            <h4 id="player-title" class="text-sm font-semibold text-white truncate">曲を選択してください</h4>
+            <button id="player-fav-btn" onclick="togglePlayerFavorite()" class="text-slate-500 hover:text-amber-400 transition">
+              <i data-lucide="star" class="w-4 h-4"></i>
+            </button>
+          </div>
+          <p id="player-style" class="text-xs text-slate-400 truncate">YuE2 Studio</p>
+        </div>
+      </div>
+
+      <!-- 中央プレイヤーコントロール -->
+      <div class="flex flex-col items-center gap-1.5 w-full sm:w-2/4">
+        <div class="flex items-center gap-4">
+          <button id="shuffle-btn" onclick="toggleShuffle()" class="text-slate-400 hover:text-slate-200 transition" title="シャッフル">
+            <i data-lucide="shuffle" class="w-4 h-4"></i>
+          </button>
+          <button onclick="playPrev()" class="text-slate-300 hover:text-white transition" title="前の曲">
+            <i data-lucide="skip-back" class="w-5 h-5"></i>
+          </button>
+          <button id="play-pause-btn" onclick="togglePlay()" class="w-10 h-10 rounded-full bg-cyan-500 hover:bg-cyan-400 text-slate-950 flex items-center justify-center shadow-lg shadow-cyan-500/25 transition">
+            <i data-lucide="play" class="w-5 h-5 ml-0.5" id="play-pause-icon"></i>
+          </button>
+          <button onclick="playNext()" class="text-slate-300 hover:text-white transition" title="次の曲">
+            <i data-lucide="skip-forward" class="w-5 h-5"></i>
+          </button>
+          <button id="repeat-btn" onclick="toggleRepeat()" class="text-slate-400 hover:text-slate-200 transition" title="リピート">
+            <i data-lucide="repeat" class="w-4 h-4"></i>
+          </button>
+        </div>
+
+        <!-- シークバー & 時間 -->
+        <div class="w-full flex items-center gap-2 text-[11px] text-slate-400">
+          <span id="current-time">0:00</span>
+          <div class="relative flex-1 h-1.5 bg-slate-800 rounded-full cursor-pointer group" id="progress-container" onclick="seekAudio(event)">
+            <div id="progress-bar" class="absolute top-0 left-0 bottom-0 bg-gradient-to-r from-cyan-500 to-emerald-400 rounded-full w-0 transition-all"></div>
+          </div>
+          <span id="total-duration">0:00</span>
+        </div>
+      </div>
+
+      <!-- 右側 音量 & 動画プレビュー小窓 -->
+      <div class="flex items-center justify-end gap-3 w-full sm:w-1/4">
+        <!-- 動画ポップアップボタン -->
+        <button id="player-video-btn" onclick="openCurrentVideoModal()" class="hidden px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-cyan-400 border border-cyan-900/50 text-xs font-medium flex items-center gap-1.5 transition">
+          <i data-lucide="video" class="w-3.5 h-3.5"></i>
+          <span>動画</span>
+        </button>
+        
+        <!-- 歌詞ボタン -->
+        <button id="player-lyrics-btn" onclick="openCurrentLyricsModal()" class="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 text-xs font-medium flex items-center gap-1.5 transition">
+          <i data-lucide="file-text" class="w-3.5 h-3.5"></i>
+          <span>歌詞</span>
+        </button>
+
+        <!-- 音量 -->
+        <div class="flex items-center gap-2">
+          <button onclick="toggleMute()" class="text-slate-400 hover:text-slate-200 transition">
+            <i data-lucide="volume-2" class="w-4 h-4" id="volume-icon"></i>
+          </button>
+          <input type="range" id="volume-slider" min="0" max="1" step="0.05" value="0.8" class="w-20 h-1 bg-slate-800 rounded-lg accent-cyan-500 cursor-pointer">
+        </div>
+      </div>
+
+    </div>
+  </footer>
+
+  <!-- 隠しオーディオ要素 -->
+  <audio id="audio-element" preload="auto"></audio>
+
+  <!-- ===================================================================== -->
+  <!-- モーダル: 1080p フルHD ビジュアライザー動画 -->
+  <!-- ===================================================================== -->
+  <div id="video-modal" class="hidden fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4">
+    <div class="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-4xl overflow-hidden shadow-2xl relative">
+      <div class="flex items-center justify-between px-5 py-3.5 border-b border-slate-800 bg-slate-950/50">
+        <h3 id="video-modal-title" class="text-sm font-semibold text-white flex items-center gap-2">
+          <i data-lucide="film" class="w-4 h-4 text-cyan-400"></i>
+          ビジュアライザー動画プレビュー (1080p)
+        </h3>
+        <button onclick="closeVideoModal()" class="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800 transition">
+          <i data-lucide="x" class="w-5 h-5"></i>
+        </button>
+      </div>
+      <div class="relative aspect-video bg-black flex items-center justify-center">
+        <video id="modal-video-element" controls class="w-full h-full object-contain"></video>
+      </div>
+      <div class="px-5 py-3 bg-slate-950 flex items-center justify-between text-xs text-slate-400">
+        <span id="video-modal-style">Japanese City Pop / 1080p Full HD</span>
+        <a id="video-modal-download-link" href="#" download class="px-3 py-1.5 rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white font-medium flex items-center gap-1.5 transition">
+          <i data-lucide="download" class="w-3.5 h-3.5"></i>
+          <span>動画をダウンロード (MP4)</span>
+        </a>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===================================================================== -->
+  <!-- モーダル: 歌詞 & プロンプト詳細 -->
+  <!-- ===================================================================== -->
+  <div id="lyrics-modal" class="hidden fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4">
+    <div class="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-2xl max-h-[85vh] flex flex-col overflow-hidden shadow-2xl">
+      
+      <!-- ヘッダー -->
+      <div class="flex items-center justify-between px-6 py-4 border-b border-slate-800 bg-slate-950/50">
+        <div>
+          <h3 id="lyrics-modal-title" class="text-base font-bold text-white">曲タイトル</h3>
+          <p id="lyrics-modal-style" class="text-xs text-cyan-400 mt-0.5">Style</p>
+        </div>
+        <button onclick="closeLyricsModal()" class="text-slate-400 hover:text-white p-1.5 rounded-lg hover:bg-slate-800 transition">
+          <i data-lucide="x" class="w-5 h-5"></i>
+        </button>
+      </div>
+
+      <!-- タブ切り替え -->
+      <div class="flex border-b border-slate-800 bg-slate-950 px-6 pt-2 gap-4 text-xs font-semibold">
+        <button id="modal-tab-raw" onclick="switchLyricsTab('raw')" class="pb-2.5 border-b-2 border-cyan-500 text-cyan-400">
+          オリジナル歌詞
+        </button>
+        <button id="modal-tab-opt" onclick="switchLyricsTab('opt')" class="pb-2.5 border-b-2 border-transparent text-slate-400 hover:text-slate-200">
+          ひらがな最適化歌詞 (YuE2投入版)
+        </button>
+        <button id="modal-tab-info" onclick="switchLyricsTab('info')" class="pb-2.5 border-b-2 border-transparent text-slate-400 hover:text-slate-200">
+          生成プロンプト・設定情報
+        </button>
+      </div>
+
+      <!-- 本文エリア -->
+      <div class="p-6 overflow-y-auto flex-1 font-mono text-xs text-slate-300 leading-relaxed whitespace-pre-wrap selection:bg-cyan-500 selection:text-black">
+        <div id="lyrics-content-raw" class="space-y-2"></div>
+        <div id="lyrics-content-opt" class="hidden space-y-2 text-cyan-200"></div>
+        <div id="lyrics-content-info" class="hidden space-y-3"></div>
+      </div>
+
+      <!-- フッター -->
+      <div class="px-6 py-3 border-t border-slate-800 bg-slate-950 flex items-center justify-between text-xs">
+        <span class="text-slate-500">YuE2 × Gemini Autonomous Pipeline</span>
+        <button onclick="copyLyricsContent()" class="px-3.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 font-medium flex items-center gap-1.5 border border-slate-700 transition">
+          <i data-lucide="copy" class="w-3.5 h-3.5"></i>
+          <span id="copy-btn-text">コピー</span>
+        </button>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ===================================================================== -->
+  <!-- モーダル: 曲名変更 (リネーム) -->
+  <!-- ===================================================================== -->
+  <div id="rename-modal" class="hidden fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4">
+    <div class="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-md overflow-hidden shadow-2xl p-6">
+      <h3 class="text-base font-bold text-white mb-2">曲名・フォルダ名を変更</h3>
+      <p class="text-xs text-slate-400 mb-4">Google Drive 上のフォルダ名および管理タイトルを更新します。</p>
+      
+      <input type="text" id="rename-input" class="w-full bg-slate-800 border border-slate-700 focus:border-cyan-500 rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none mb-6">
+      
+      <div class="flex items-center justify-end gap-3">
+        <button onclick="closeRenameModal()" class="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold transition">キャンセル</button>
+        <button onclick="submitRename()" class="px-4 py-2 rounded-xl bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-semibold transition">保存する</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===================================================================== -->
+  <!-- モーダル: 一括ダウンロード確認 -->
+  <!-- ===================================================================== -->
+  <div id="batch-dl-modal" class="hidden fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4">
+    <div class="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-md overflow-hidden shadow-2xl p-6">
+      <h3 class="text-base font-bold text-white mb-2">選択した楽曲を一括ダウンロード</h3>
+      <p class="text-xs text-slate-400 mb-4"><span id="batch-selected-count" class="text-cyan-400 font-bold">0</span> 曲の成果物を ZIP 形式で一括ダウンロードします。</p>
+
+      <div class="space-y-2 mb-6">
+        <label class="flex items-center gap-3 p-3 rounded-xl bg-slate-800/60 border border-slate-700/60 cursor-pointer hover:border-cyan-500 transition">
+          <input type="radio" name="pkg-type" value="mp3" checked class="text-cyan-500 focus:ring-0">
+          <div>
+            <div class="text-xs font-semibold text-white">MP3 音源まとめ (軽量)</div>
+            <div class="text-[11px] text-slate-400">スマホ再生用 192kbps MP3 のみ</div>
+          </div>
+        </label>
+        <label class="flex items-center gap-3 p-3 rounded-xl bg-slate-800/60 border border-slate-700/60 cursor-pointer hover:border-cyan-500 transition">
+          <input type="radio" name="pkg-type" value="full" class="text-cyan-500 focus:ring-0">
+          <div>
+            <div class="text-xs font-semibold text-white">配信フルパッケージ (DistroKid/YouTube)</div>
+            <div class="text-[11px] text-slate-400">FLAC音源 + 3000pxジャケット + 歌詞テキスト</div>
+          </div>
+        </label>
+        <label class="flex items-center gap-3 p-3 rounded-xl bg-slate-800/60 border border-slate-700/60 cursor-pointer hover:border-cyan-500 transition">
+          <input type="radio" name="pkg-type" value="video_mp3" class="text-cyan-500 focus:ring-0">
+          <div>
+            <div class="text-xs font-semibold text-white">動画 ＋ MP3 セット</div>
+            <div class="text-[11px] text-slate-400">1080pビジュアライザー動画 + MP3</div>
+          </div>
+        </label>
+      </div>
+
+      <div class="flex items-center justify-end gap-3">
+        <button onclick="closeBatchDlModal()" class="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold transition">キャンセル</button>
+        <button onclick="executeBatchDownload()" id="start-batch-dl-btn" class="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold flex items-center gap-1.5 transition">
+          <i data-lucide="download" class="w-4 h-4"></i>
+          <span>ZIP生成 & ダウンロード</span>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===================================================================== -->
+  <!-- モーダル: 設定 & 接続ガイド -->
+  <!-- ===================================================================== -->
+  <div id="settings-modal" class="hidden fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4">
+    <div class="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-lg overflow-hidden shadow-2xl p-6">
+      <div class="flex items-center justify-between mb-4">
+        <h3 class="text-base font-bold text-white flex items-center gap-2">
+          <i data-lucide="cloud" class="w-5 h-5 text-cyan-400"></i>
+          Google Drive 接続・環境設定
+        </h3>
+        <button onclick="closeSettingsModal()" class="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800 transition">
+          <i data-lucide="x" class="w-5 h-5"></i>
+        </button>
+      </div>
+
+      <div class="space-y-4 text-xs text-slate-300 leading-relaxed mb-6">
+        <div class="p-3.5 rounded-xl bg-slate-950 border border-slate-800 space-y-1.5">
+          <div class="font-semibold text-slate-200">現在の接続状態:</div>
+          <div class="text-slate-400">ステータス: <span id="setting-status-text" class="text-cyan-400 font-bold">確認中</span></div>
+          <div class="text-slate-400">フォルダID: <span id="setting-folder-id" class="font-mono text-slate-300">未設定</span></div>
+          <div class="text-slate-400">トークン元: <span id="setting-token-source" class="font-mono text-slate-300">未設定</span></div>
+        </div>
+
+        <div class="space-y-2">
+          <h4 class="font-semibold text-slate-200">ローカルから本番 Google Drive に接続する手順:</h4>
+          <ol class="list-decimal list-inside space-y-1 text-slate-400">
+            <li>プロジェクト直下に <code class="text-cyan-300 bg-slate-800 px-1 py-0.5 rounded">.env</code> ファイルを作成します。</li>
+            <li>以下のように環境変数を記述します:</li>
+          </ol>
+          <pre class="bg-slate-950 border border-slate-800 rounded-xl p-3 text-[11px] font-mono text-slate-300 overflow-x-auto">
+TARGET_FOLDER_ID="1xXgRRyAVwIXKB-dIimDwWwd..."
+USER_TOKEN_B64="eyJ0b2tlbiI6IC..."
+# または token.json を直下に配置しても自動認識します</pre>
+        </div>
+      </div>
+
+      <div class="flex items-center justify-end">
+        <button onclick="closeSettingsModal()" class="px-4 py-2 rounded-xl bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-semibold transition">閉じる</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===================================================================== -->
+  <!-- JavaScript アプリケーションロジック -->
+  <!-- ===================================================================== -->
+  <script>
+    // --- 状態管理 ---
+    let allSongs = [];
+    let filteredSongs = [];
+    let currentFilter = 'all'; // 'all', 'favorites', 'video'
+    let currentSongIndex = -1;
+    let isPlaying = false;
+    let isShuffle = false;
+    let isRepeat = false;
+    let favorites = JSON.parse(localStorage.getItem('yue2_favorites') || '[]');
+    let selectedSongIds = new Set();
+    let currentLyricsSong = null;
+
+    // 統計・インサイト絞り込み用状態
+    let selectedGenre = null;
+    let selectedMood = null;
+    let selectedMoodLabel = null;
+    let selectedVocal = null;
+    let selectedBpmRange = null;
+    let statsData = null;
+    let isStatsCollapsed = false;
+
+    const audio = document.getElementById('audio-element');
+
+    // --- 初期ロード ---
+    document.addEventListener('DOMContentLoaded', async () => {
+      lucide.createIcons();
+      setupAudioListeners();
+      setupSearchListeners();
+      await fetchStatus();
+      await loadSongs();
+      await fetchStats();
+    });
+
+    // --- 統計データ取得 & UI生成 ---
+    async function fetchStats() {
+      try {
+        const res = await fetch('/api/stats');
+        statsData = await res.json();
+        
+        // 1. サマリーカード
+        document.getElementById('stat-total-songs').textContent = statsData.summary.total_songs;
+        document.getElementById('stat-with-video').textContent = statsData.summary.with_video;
+        document.getElementById('stat-avg-bpm').textContent = statsData.summary.avg_bpm;
+        document.getElementById('stat-total-size').textContent = statsData.summary.total_size_mb;
+        document.getElementById('stats-summary-pill').textContent = `${statsData.summary.total_songs} 曲 / ${(statsData.summary.total_size_mb / 1024).toFixed(1)} GB`;
+
+        renderStatsChips();
+      } catch (e) {
+        console.error('Stats fetch error:', e);
+      }
+    }
+
+    function renderStatsChips() {
+      if (!statsData) return;
+
+      // 2. ジャンルチップ (上位15件)
+      const genreContainer = document.getElementById('genre-chips-container');
+      genreContainer.innerHTML = statsData.genres.slice(0, 16).map(g => {
+        const isActive = selectedGenre === g.name;
+        return `
+          <button onclick="toggleGenreFilter('${g.name}')" class="px-2.5 py-1 rounded-lg text-xs font-medium border transition flex items-center gap-1.5 ${
+            isActive 
+              ? 'bg-cyan-500 text-slate-950 font-bold border-cyan-400 shadow-md shadow-cyan-500/20' 
+              : 'bg-slate-950/70 hover:bg-slate-800 text-slate-300 border-slate-800 hover:border-slate-700'
+          }">
+            <span>${escapeHtml(g.name)}</span>
+            <span class="text-[10px] px-1 rounded-full ${isActive ? 'bg-cyan-950 text-cyan-200' : 'bg-slate-800 text-slate-400'}">${g.count}</span>
+          </button>
+        `;
+      }).join('');
+
+      // 3. 雰囲気・ムードチップ
+      const moodContainer = document.getElementById('mood-chips-container');
+      moodContainer.innerHTML = statsData.moods.map(m => {
+        const isActive = selectedMood === m.raw;
+        return `
+          <button onclick="toggleMoodFilter('${m.raw}', '${m.label}')" class="px-2.5 py-1 rounded-lg text-xs font-medium border transition flex items-center gap-1.5 ${
+            isActive 
+              ? 'bg-amber-400 text-slate-950 font-bold border-amber-300 shadow-md shadow-amber-400/20' 
+              : 'bg-slate-950/70 hover:bg-slate-800 text-slate-300 border-slate-800 hover:border-slate-700'
+          }">
+            <span>${escapeHtml(m.label)}</span>
+            <span class="text-[10px] px-1 rounded-full ${isActive ? 'bg-amber-950 text-amber-200' : 'bg-slate-800 text-slate-400'}">${m.count}</span>
+          </button>
+        `;
+      }).join('');
+
+      // 4. ボーカルチップ
+      const vocalContainer = document.getElementById('vocal-chips-container');
+      vocalContainer.innerHTML = statsData.vocals.map(v => {
+        const isActive = selectedVocal === v.name;
+        return `
+          <button onclick="toggleVocalFilter('${v.name}')" class="px-2.5 py-1 rounded-lg text-xs font-medium border transition flex items-center gap-1.5 ${
+            isActive 
+              ? 'bg-emerald-500 text-slate-950 font-bold border-emerald-400 shadow-md shadow-emerald-500/20' 
+              : 'bg-slate-950/70 hover:bg-slate-800 text-slate-300 border-slate-800 hover:border-slate-700'
+          }">
+            <span>${escapeHtml(v.name)}</span>
+            <span class="text-[10px] px-1 rounded-full ${isActive ? 'bg-emerald-950 text-emerald-200' : 'bg-slate-800 text-slate-400'}">${v.count}</span>
+          </button>
+        `;
+      }).join('');
+
+      // 5. テンポ（BPM）チップ
+      const bpmContainer = document.getElementById('bpm-chips-container');
+      const bRanges = [
+        { key: 'slow', label: '🐢 スロー (<100)', count: statsData.bpm_ranges.slow.count },
+        { key: 'mid', label: '🚶 ミディアム (100-130)', count: statsData.bpm_ranges.mid.count },
+        { key: 'fast', label: '🏃 アップテンポ (>130)', count: statsData.bpm_ranges.fast.count },
+      ];
+      bpmContainer.innerHTML = bRanges.map(b => {
+        const isActive = selectedBpmRange === b.key;
+        return `
+          <button onclick="toggleBpmFilter('${b.key}')" class="px-2.5 py-1 rounded-lg text-xs font-medium border transition flex items-center gap-1.5 ${
+            isActive 
+              ? 'bg-teal-400 text-slate-950 font-bold border-teal-300 shadow-md shadow-teal-400/20' 
+              : 'bg-slate-950/70 hover:bg-slate-800 text-slate-300 border-slate-800 hover:border-slate-700'
+          }">
+            <span>${escapeHtml(b.label)}</span>
+            <span class="text-[10px] px-1 rounded-full ${isActive ? 'bg-teal-950 text-teal-200' : 'bg-slate-800 text-slate-400'}">${b.count}</span>
+          </button>
+        `;
+      }).join('');
+
+      lucide.createIcons();
+    }
+
+    // --- 絞り込みトグル関数 ---
+    function toggleGenreFilter(genre) {
+      selectedGenre = (selectedGenre === genre) ? null : genre;
+      renderStatsChips();
+      renderActiveFilterChips();
+      applyFilterAndRender();
+    }
+
+    function toggleMoodFilter(moodRaw, moodLabel) {
+      if (selectedMood === moodRaw) {
+        selectedMood = null;
+        selectedMoodLabel = null;
+      } else {
+        selectedMood = moodRaw;
+        selectedMoodLabel = moodLabel;
+      }
+      renderStatsChips();
+      renderActiveFilterChips();
+      applyFilterAndRender();
+    }
+
+    function toggleVocalFilter(vocalType) {
+      selectedVocal = (selectedVocal === vocalType) ? null : vocalType;
+      renderStatsChips();
+      renderActiveFilterChips();
+      applyFilterAndRender();
+    }
+
+    function toggleBpmFilter(rangeKey) {
+      selectedBpmRange = (selectedBpmRange === rangeKey) ? null : rangeKey;
+      renderStatsChips();
+      renderActiveFilterChips();
+      applyFilterAndRender();
+    }
+
+    function clearAllFilters() {
+      selectedGenre = null;
+      selectedMood = null;
+      selectedMoodLabel = null;
+      selectedVocal = null;
+      selectedBpmRange = null;
+      document.getElementById('search-input').value = '';
+      document.getElementById('search-clear-btn').classList.add('hidden');
+      renderStatsChips();
+      renderActiveFilterChips();
+      applyFilterAndRender();
+    }
+
+    function toggleStatsPanel() {
+      const body = document.getElementById('stats-panel-body');
+      const icon = document.getElementById('stats-toggle-icon');
+      const text = document.getElementById('stats-toggle-text');
+      isStatsCollapsed = !isStatsCollapsed;
+      body.classList.toggle('hidden', isStatsCollapsed);
+      icon.style.transform = isStatsCollapsed ? 'rotate(180deg)' : 'rotate(0deg)';
+      text.textContent = isStatsCollapsed ? '開く' : '閉じる';
+    }
+
+    function renderActiveFilterChips() {
+      const bar = document.getElementById('active-filters-bar');
+      const container = document.getElementById('active-filter-chips');
+      const chips = [];
+
+      if (selectedGenre) {
+        chips.push(`
+          <span class="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-lg bg-cyan-900/60 border border-cyan-700/60 text-cyan-200 text-xs font-semibold">
+            ジャンル: ${escapeHtml(selectedGenre)}
+            <button onclick="toggleGenreFilter('${selectedGenre}')" class="hover:text-white ml-0.5">×</button>
+          </span>
+        `);
+      }
+
+      if (selectedMood) {
+        chips.push(`
+          <span class="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-lg bg-amber-900/60 border border-amber-700/60 text-amber-200 text-xs font-semibold">
+            雰囲気: ${escapeHtml(selectedMoodLabel || selectedMood)}
+            <button onclick="toggleMoodFilter('${selectedMood}')" class="hover:text-white ml-0.5">×</button>
+          </span>
+        `);
+      }
+
+      if (selectedVocal) {
+        chips.push(`
+          <span class="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-lg bg-emerald-900/60 border border-emerald-700/60 text-emerald-200 text-xs font-semibold">
+            ボーカル: ${escapeHtml(selectedVocal)}
+            <button onclick="toggleVocalFilter('${selectedVocal}')" class="hover:text-white ml-0.5">×</button>
+          </span>
+        `);
+      }
+
+      if (selectedBpmRange) {
+        const lbl = selectedBpmRange === 'slow' ? 'スロー (<100)' : selectedBpmRange === 'mid' ? 'ミディアム (100-130)' : 'アップテンポ (>130)';
+        chips.push(`
+          <span class="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-lg bg-teal-900/60 border border-teal-700/60 text-teal-200 text-xs font-semibold">
+            テンポ: ${lbl}
+            <button onclick="toggleBpmFilter('${selectedBpmRange}')" class="hover:text-white ml-0.5">×</button>
+          </span>
+        `);
+      }
+
+      if (chips.length > 0) {
+        container.innerHTML = chips.join('');
+        bar.classList.remove('hidden');
+      } else {
+        bar.classList.add('hidden');
+      }
+    }
+
+    // --- API呼び出し ---
+    async function fetchStatus() {
+      try {
+        const res = await fetch('/api/status');
+        const data = await res.json();
+        const badge = document.getElementById('drive-status-badge');
+        const banner = document.getElementById('demo-banner');
+        
+        document.getElementById('setting-status-text').textContent = data.connected ? '接続成功 (オンライン)' : '未接続 (デモモード)';
+        document.getElementById('setting-folder-id').textContent = data.target_folder_id;
+        document.getElementById('setting-token-source').textContent = data.token_source;
+
+        if (data.connected) {
+          badge.innerHTML = `<span class="w-2 h-2 rounded-full bg-emerald-400"></span> Google Drive 連携中`;
+          banner.classList.add('hidden');
+        } else {
+          badge.innerHTML = `<span class="w-2 h-2 rounded-full bg-amber-400"></span> デモモード (Drive未連携)`;
+          banner.classList.remove('hidden');
+        }
+      } catch (e) {
+        console.error('Status fetch error:', e);
+      }
+    }
+
+    let syncPollTimer = null;
+
+    async function loadSongs() {
+      const container = document.getElementById('songs-container');
+      const spinner = document.getElementById('loading-spinner');
+
+      spinner.classList.remove('hidden');
+
+      try {
+        const res = await fetch('/api/songs');
+        const data = await res.json();
+        allSongs = data.songs || [];
+        updateCounts();
+        applyFilterAndRender();
+        
+        // もしサーバー側で同期が進行中なら自動で進捗バーを追跡
+        if (data.sync && data.sync.status === 'scanning') {
+          startSyncPolling();
+        }
+      } catch (e) {
+        console.error('Songs load error:', e);
+      } finally {
+        spinner.classList.add('hidden');
+      }
+    }
+
+    async function triggerSync() {
+      const refreshBtn = document.getElementById('refresh-btn');
+      const refreshIcon = document.getElementById('refresh-icon');
+      refreshIcon.classList.add('animate-spin');
+      refreshBtn.disabled = true;
+
+      try {
+        const res = await fetch('/api/sync/start', { method: 'POST' });
+        const data = await res.json();
+        startSyncPolling();
+      } catch (e) {
+        console.error('Sync start error:', e);
+        refreshIcon.classList.remove('animate-spin');
+        refreshBtn.disabled = false;
+        alert('同期の開始に失敗しました。.env の設定を確認してください。');
+      }
+    }
+
+    function startSyncPolling() {
+      const banner = document.getElementById('sync-progress-banner');
+      banner.classList.remove('hidden');
+      document.getElementById('refresh-icon').classList.add('animate-spin');
+      document.getElementById('refresh-btn').disabled = true;
+
+      if (syncPollTimer) clearInterval(syncPollTimer);
+      syncPollTimer = setInterval(async () => {
+        try {
+          const res = await fetch('/api/sync/progress');
+          const p = await res.json();
+
+          const msgEl = document.getElementById('sync-progress-message');
+          const pctEl = document.getElementById('sync-progress-percent');
+          const barEl = document.getElementById('sync-progress-bar');
+          const detailEl = document.getElementById('sync-progress-detail');
+          const countsEl = document.getElementById('sync-progress-counts');
+
+          msgEl.textContent = p.message || 'Google Drive をスキャン中...';
+          pctEl.textContent = `${p.percent}%`;
+          barEl.style.width = `${p.percent}%`;
+          detailEl.textContent = p.current_song ? `解析中: ${p.current_song}` : 'メタデータを読み込み中...';
+          countsEl.textContent = `${p.current} / ${p.total} 曲`;
+
+          if (p.status === 'completed') {
+            clearInterval(syncPollTimer);
+            syncPollTimer = null;
+            document.getElementById('refresh-icon').classList.remove('animate-spin');
+            document.getElementById('refresh-btn').disabled = false;
+            msgEl.textContent = '🎉 同期完了！最新の楽曲リストを読み込みました';
+            barEl.style.width = '100%';
+            pctEl.textContent = '100%';
+            
+            await loadSongs();
+            await fetchStatus();
+
+            setTimeout(() => {
+              banner.classList.add('hidden');
+            }, 3500);
+          } else if (p.status === 'error') {
+            clearInterval(syncPollTimer);
+            syncPollTimer = null;
+            document.getElementById('refresh-icon').classList.remove('animate-spin');
+            document.getElementById('refresh-btn').disabled = false;
+            alert(p.message || '同期エラーが発生しました');
+            banner.classList.add('hidden');
+          }
+        } catch (e) {
+          console.error('Sync poll error:', e);
+        }
+      }, 700);
+    }
+
+    // --- フィルタ & レンダリング ---
+    function setFilter(filter) {
+      currentFilter = filter;
+      document.querySelectorAll('.tab-btn').forEach(btn => {
+        btn.classList.remove('bg-cyan-600', 'text-white', 'font-semibold');
+        btn.classList.add('text-slate-400');
+      });
+      const activeBtn = document.getElementById(`tab-${filter}`);
+      if (activeBtn) {
+        activeBtn.classList.add('bg-cyan-600', 'text-white', 'font-semibold');
+        activeBtn.classList.remove('text-slate-400');
+      }
+      applyFilterAndRender();
+    }
+
+    function updateCounts() {
+      document.getElementById('count-all').textContent = allSongs.length;
+      document.getElementById('count-fav').textContent = allSongs.filter(s => favorites.includes(s.id)).length;
+      document.getElementById('count-video').textContent = allSongs.filter(s => s.video_id).length;
+    }
+
+    function applyFilterAndRender() {
+      const query = document.getElementById('search-input').value.toLowerCase().trim();
+      const sort = document.getElementById('sort-select').value;
+
+      filteredSongs = allSongs.filter(song => {
+        // 1. タブフィルタ
+        if (currentFilter === 'favorites' && !favorites.includes(song.id)) return false;
+        if (currentFilter === 'video' && !song.video_id) return false;
+
+        const songStyle = (song.style || '').toLowerCase();
+        const songTheme = (song.theme || '');
+        const songTitle = (song.title || '');
+
+        // 2. ジャンルフィルタ
+        if (selectedGenre) {
+          const gLower = selectedGenre.toLowerCase();
+          if (!songStyle.includes(gLower)) return false;
+        }
+
+        // 3. 雰囲気・ムードフィルタ
+        if (selectedMood) {
+          const matchTheme = songTheme.includes(selectedMood);
+          const matchTitle = songTitle.includes(selectedMood);
+          const matchLyrics = (song.lyrics_raw || '').includes(selectedMood);
+          if (!matchTheme && !matchTitle && !matchLyrics) return false;
+        }
+
+        // 4. ボーカルフィルタ
+        if (selectedVocal) {
+          if (selectedVocal.includes('女性') && !songStyle.includes('female vocal')) return false;
+          if (selectedVocal.includes('男性') && !songStyle.includes('male vocal')) return false;
+          if (selectedVocal.includes('デュエット') && !songStyle.includes('duet')) return false;
+          if (selectedVocal.includes('インスト') && (songStyle.includes('female vocal') || songStyle.includes('male vocal') || songStyle.includes('duet'))) return false;
+        }
+
+        // 5. テンポ（BPM）フィルタ
+        if (selectedBpmRange) {
+          const bpmMatch = songStyle.match(/(\d+)\s*bpm/);
+          if (bpmMatch) {
+            const bpm = parseInt(bpmMatch[1], 10);
+            if (selectedBpmRange === 'slow' && bpm >= 100) return false;
+            if (selectedBpmRange === 'mid' && (bpm < 100 || bpm > 130)) return false;
+            if (selectedBpmRange === 'fast' && bpm <= 130) return false;
+          } else {
+            return false;
+          }
+        }
+
+        // 6. テキスト検索フィルタ
+        if (query) {
+          const matchTitle = songTitle.toLowerCase().includes(query);
+          const matchStyle = songStyle.includes(query);
+          const matchTheme = songTheme.toLowerCase().includes(query);
+          const matchLyrics = (song.lyrics_raw || '').toLowerCase().includes(query) || (song.lyrics_opt || '').toLowerCase().includes(query);
+          if (!matchTitle && !matchStyle && !matchTheme && !matchLyrics) return false;
+        }
+
+        return true;
+      });
+
+      // ソート
+      if (sort === 'newest') {
+        filteredSongs.sort((a, b) => (b.timestamp || '').localeCompare(a.timestamp || ''));
+      } else if (sort === 'oldest') {
+        filteredSongs.sort((a, b) => (a.timestamp || '').localeCompare(b.timestamp || ''));
+      } else if (sort === 'title') {
+        filteredSongs.sort((a, b) => (a.title || '').localeCompare(b.title || ''));
+      }
+
+      renderSongsList();
+    }
+
+    function renderSongsList() {
+      const container = document.getElementById('songs-container');
+      const emptyState = document.getElementById('empty-state');
+
+      if (filteredSongs.length === 0) {
+        container.innerHTML = '';
+        emptyState.classList.remove('hidden');
+        return;
+      }
+      emptyState.classList.add('hidden');
+
+      container.innerHTML = filteredSongs.map((song, idx) => {
+        const isFav = favorites.includes(song.id);
+        const isSelected = selectedSongIds.has(song.id);
+        const isCurrentPlaying = currentSongIndex >= 0 && allSongs[currentSongIndex]?.id === song.id;
+        const coverSrc = song.cover_id && !song.cover_id.startsWith('demo_') 
+          ? `/api/media/${song.cover_id}` 
+          : 'https://images.unsplash.com/photo-1518709268805-4e9042af9f23?w=300&h=300&fit=crop';
+
+        return `
+          <div class="song-card group flex items-center justify-between gap-4 p-3.5 rounded-2xl bg-slate-900/60 hover:bg-slate-900 border ${isCurrentPlaying ? 'border-cyan-500 bg-cyan-950/20' : 'border-slate-800/80 hover:border-slate-700'} transition-all">
+            
+            <!-- 左側: チェックボックス + カバー + タイトル & スタイル -->
+            <div class="flex items-center gap-3.5 min-w-0 flex-1">
+              <input type="checkbox" onchange="toggleSelectSong('${song.id}')" ${isSelected ? 'checked' : ''} class="w-4 h-4 rounded border-slate-700 text-cyan-600 focus:ring-0 bg-slate-800 cursor-pointer">
+              
+              <!-- カバーアート (ホバーで再生オーバーレイ) -->
+              <div class="relative w-14 h-14 rounded-xl overflow-hidden shrink-0 border border-slate-800 bg-slate-950 group/cover cursor-pointer" onclick="playSongById('${song.id}')">
+                <img src="${coverSrc}" class="w-full h-full object-cover group-hover/cover:scale-105 transition duration-300" alt="Cover" loading="lazy">
+                <div class="absolute inset-0 bg-black/40 flex items-center justify-center opacity-0 group-hover/cover:opacity-100 transition">
+                  <i data-lucide="${isCurrentPlaying && isPlaying ? 'pause' : 'play'}" class="w-6 h-6 text-white drop-shadow"></i>
+                </div>
+              </div>
+
+              <!-- 曲情報 -->
+              <div class="min-w-0 flex-1">
+                <div class="flex items-center gap-2">
+                  <h3 class="text-sm font-semibold text-white truncate cursor-pointer hover:text-cyan-400 transition" onclick="playSongById('${song.id}')">${escapeHtml(song.title)}</h3>
+                  <button onclick="openRenameModal('${song.id}', '${escapeHtml(song.title)}')" class="opacity-0 group-hover:opacity-100 text-slate-500 hover:text-slate-300 p-0.5 rounded transition" title="曲名を編集">
+                    <i data-lucide="edit-3" class="w-3.5 h-3.5"></i>
+                  </button>
+                  <button onclick="toggleFavorite('${song.id}')" class="text-slate-600 hover:text-amber-400 transition ${isFav ? '!text-amber-400' : ''}" title="お気に入り">
+                    <i data-lucide="star" class="w-4 h-4 ${isFav ? 'fill-amber-400' : ''}"></i>
+                  </button>
+                </div>
+
+                <div class="flex flex-wrap items-center gap-1.5 mt-1">
+                  <span class="text-xs text-slate-400 truncate max-w-[280px]">${escapeHtml(song.style || 'AI Generated')}</span>
+                  <span class="text-slate-700">•</span>
+                  <span class="text-[11px] text-slate-500">${escapeHtml(song.timestamp ? song.timestamp.substring(0, 10) : '')}</span>
+                </div>
+
+                <!-- アセットバッジ -->
+                <div class="flex items-center gap-1.5 mt-1 text-[10px] font-mono">
+                  ${song.mp3_id ? '<span class="px-1.5 py-0.2 rounded bg-emerald-950/70 text-emerald-400 border border-emerald-800/60 font-semibold">MP3</span>' : ''}
+                  ${song.flac_id ? '<span class="px-1.5 py-0.2 rounded bg-cyan-950/70 text-cyan-400 border border-cyan-800/60 font-semibold">FLAC</span>' : ''}
+                  ${song.cover_id ? '<span class="px-1.5 py-0.2 rounded bg-purple-950/70 text-purple-400 border border-purple-800/60 font-semibold">3000px</span>' : ''}
+                  ${song.video_id ? '<span class="px-1.5 py-0.2 rounded bg-pink-950/70 text-pink-400 border border-pink-800/60 font-semibold">1080p動画</span>' : ''}
+                </div>
+              </div>
+            </div>
+
+            <!-- 右側: アクションボタン群 -->
+            <div class="flex items-center gap-1.5 shrink-0">
+              ${song.video_id ? `
+                <button onclick="openVideoModal('${song.id}')" class="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-pink-400 hover:text-pink-300 border border-slate-700 hover:border-pink-800 text-xs font-medium flex items-center gap-1 transition" title="ビジュアライザー動画を再生">
+                  <i data-lucide="film" class="w-4 h-4"></i>
+                  <span class="hidden md:inline">動画</span>
+                </button>
+              ` : ''}
+
+              <button onclick="openLyricsModal('${song.id}')" class="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700 text-xs font-medium flex items-center gap-1 transition" title="歌詞とプロンプトを表示">
+                <i data-lucide="file-text" class="w-4 h-4"></i>
+                <span class="hidden md:inline">歌詞</span>
+              </button>
+
+              <button onclick="playSongById('${song.id}')" class="p-2.5 rounded-xl bg-cyan-600 hover:bg-cyan-500 text-white font-medium shadow-md shadow-cyan-600/20 transition" title="再生">
+                <i data-lucide="${isCurrentPlaying && isPlaying ? 'pause' : 'play'}" class="w-4 h-4"></i>
+              </button>
+            </div>
+
+          </div>
+        `;
+      }).join('');
+
+      lucide.createIcons();
+    }
+
+    // --- オーディオプレイヤー制御 ---
+    function setupAudioListeners() {
+      audio.addEventListener('timeupdate', () => {
+        if (!audio.duration) return;
+        const progress = (audio.currentTime / audio.duration) * 100;
+        document.getElementById('progress-bar').style.width = `${progress}%`;
+        document.getElementById('current-time').textContent = formatTime(audio.currentTime);
+      });
+
+      audio.addEventListener('loadedmetadata', () => {
+        document.getElementById('total-duration').textContent = formatTime(audio.duration);
+      });
+
+      audio.addEventListener('ended', () => {
+        if (isRepeat) {
+          audio.currentTime = 0;
+          audio.play();
+        } else {
+          playNext();
+        }
+      });
+
+      document.getElementById('volume-slider').addEventListener('input', (e) => {
+        audio.volume = parseFloat(e.target.value);
+        updateVolumeIcon(audio.volume);
+      });
+    }
+
+    function playSongById(id) {
+      const idx = allSongs.findIndex(s => s.id === id);
+      if (idx !== -1) playSong(idx);
+    }
+
+    function playSong(index) {
+      currentSongIndex = index;
+      const song = allSongs[index];
+      if (!song) return;
+
+      document.getElementById('player-title').textContent = song.title;
+      document.getElementById('player-style').textContent = song.style || 'AI Generated';
+      
+      const coverImg = document.getElementById('player-cover');
+      coverImg.src = song.cover_id && !song.cover_id.startsWith('demo_') 
+        ? `/api/media/${song.cover_id}` 
+        : 'https://images.unsplash.com/photo-1518709268805-4e9042af9f23?w=100&h=100&fit=crop';
+
+      // 動画ボタンの表示切替
+      const videoBtn = document.getElementById('player-video-btn');
+      if (song.video_id) {
+        videoBtn.classList.remove('hidden');
+      } else {
+        videoBtn.classList.add('hidden');
+      }
+
+      // お気に入り状態
+      updatePlayerFavIcon();
+
+      // 音声ストリーム設定
+      if (song.mp3_id && !song.mp3_id.startsWith('demo_')) {
+        audio.src = `/api/stream/${song.mp3_id}`;
+      } else {
+        // デモ用プレースホルダーサウンド（Web Audio API でシンプルなメロディ）
+        audio.src = '';
+        playDemoSynth();
+      }
+
+      if (audio.src) {
+        audio.play().catch(e => console.log('Autoplay blocked:', e));
+      }
+      isPlaying = true;
+      updatePlayPauseButton();
+      renderSongsList();
+    }
+
+    function togglePlay() {
+      if (currentSongIndex < 0 && allSongs.length > 0) {
+        playSong(0);
+        return;
+      }
+      if (isPlaying) {
+        audio.pause();
+        isPlaying = false;
+      } else {
+        audio.play().catch(e => console.log(e));
+        isPlaying = true;
+      }
+      updatePlayPauseButton();
+      renderSongsList();
+    }
+
+    function updatePlayPauseButton() {
+      const icon = document.getElementById('play-pause-icon');
+      if (isPlaying) {
+        icon.setAttribute('data-lucide', 'pause');
+      } else {
+        icon.setAttribute('data-lucide', 'play');
+      }
+      lucide.createIcons();
+    }
+
+    function playNext() {
+      if (allSongs.length === 0) return;
+      if (isShuffle) {
+        currentSongIndex = Math.floor(Math.random() * allSongs.length);
+      } else {
+        currentSongIndex = (currentSongIndex + 1) % allSongs.length;
+      }
+      playSong(currentSongIndex);
+    }
+
+    function playPrev() {
+      if (allSongs.length === 0) return;
+      currentSongIndex = (currentSongIndex - 1 + allSongs.length) % allSongs.length;
+      playSong(currentSongIndex);
+    }
+
+    function toggleShuffle() {
+      isShuffle = !isShuffle;
+      document.getElementById('shuffle-btn').classList.toggle('text-cyan-400', isShuffle);
+    }
+
+    function toggleRepeat() {
+      isRepeat = !isRepeat;
+      document.getElementById('repeat-btn').classList.toggle('text-cyan-400', isRepeat);
+    }
+
+    function seekAudio(e) {
+      const rect = e.currentTarget.getBoundingClientRect();
+      const pos = (e.clientX - rect.left) / rect.width;
+      if (audio.duration) {
+        audio.currentTime = pos * audio.duration;
+      }
+    }
+
+    function toggleMute() {
+      audio.muted = !audio.muted;
+      updateVolumeIcon(audio.muted ? 0 : audio.volume);
+    }
+
+    function updateVolumeIcon(vol) {
+      const icon = document.getElementById('volume-icon');
+      if (vol === 0) {
+        icon.setAttribute('data-lucide', 'volume-x');
+      } else if (vol < 0.5) {
+        icon.setAttribute('data-lucide', 'volume-1');
+      } else {
+        icon.setAttribute('data-lucide', 'volume-2');
+      }
+      lucide.createIcons();
+    }
+
+    function formatTime(sec) {
+      if (isNaN(sec)) return '0:00';
+      const m = Math.floor(sec / 60);
+      const s = Math.floor(sec % 60);
+      return `${m}:${s < 10 ? '0' : ''}${s}`;
+    }
+
+    // デモ用の簡易トーン生成
+    function playDemoSynth() {
+      try {
+        const ctx = new (window.AudioContext || window.webkitAudioContext)();
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(440, ctx.currentTime);
+        gain.gain.setValueAtTime(0.1, ctx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 1.5);
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.start();
+        osc.stop(ctx.currentTime + 1.5);
+      } catch (e) {}
+    }
+
+    // --- お気に入り管理 ---
+    function toggleFavorite(id) {
+      if (favorites.includes(id)) {
+        favorites = favorites.filter(fid => fid !== id);
+      } else {
+        favorites.push(id);
+      }
+      localStorage.setItem('yue2_favorites', JSON.stringify(favorites));
+      updateCounts();
+      updatePlayerFavIcon();
+      applyFilterAndRender();
+    }
+
+    function togglePlayerFavorite() {
+      if (currentSongIndex >= 0) {
+        toggleFavorite(allSongs[currentSongIndex].id);
+      }
+    }
+
+    function updatePlayerFavIcon() {
+      if (currentSongIndex < 0) return;
+      const isFav = favorites.includes(allSongs[currentSongIndex].id);
+      const btn = document.getElementById('player-fav-btn');
+      btn.innerHTML = `<i data-lucide="star" class="w-4 h-4 ${isFav ? 'text-amber-400 fill-amber-400' : 'text-slate-500'}"></i>`;
+      lucide.createIcons();
+    }
+
+    // --- 選択・一括ダウンロード ---
+    function toggleSelectSong(id) {
+      if (selectedSongIds.has(id)) {
+        selectedSongIds.delete(id);
+      } else {
+        selectedSongIds.add(id);
+      }
+      updateBatchDlButton();
+    }
+
+    document.getElementById('select-all-checkbox').addEventListener('change', (e) => {
+      if (e.target.checked) {
+        filteredSongs.forEach(s => selectedSongIds.add(s.id));
+      } else {
+        selectedSongIds.clear();
+      }
+      updateBatchDlButton();
+      renderSongsList();
+    });
+
+    function updateBatchDlButton() {
+      const btn = document.getElementById('batch-dl-btn');
+      const label = document.getElementById('batch-dl-label');
+      if (selectedSongIds.size > 0) {
+        btn.disabled = false;
+        label.textContent = `一括DL (${selectedSongIds.size})`;
+      } else {
+        btn.disabled = true;
+        label.textContent = '一括DL';
+      }
+    }
+
+    document.getElementById('batch-dl-btn').addEventListener('click', () => {
+      document.getElementById('batch-selected-count').textContent = selectedSongIds.size;
+      document.getElementById('batch-dl-modal').classList.remove('hidden');
+    });
+
+    function closeBatchDlModal() {
+      document.getElementById('batch-dl-modal').classList.add('hidden');
+    }
+
+    async function executeBatchDownload() {
+      const btn = document.getElementById('start-batch-dl-btn');
+      btn.disabled = true;
+      btn.innerHTML = `<i data-lucide="loader-2" class="w-4 h-4 animate-spin"></i> 生成中...`;
+      lucide.createIcons();
+
+      const pkgType = document.querySelector('input[name="pkg-type"]:checked').value;
+      try {
+        const res = await fetch('/api/download/zip', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({
+            song_ids: Array.from(selectedSongIds),
+            package_type: pkgType
+          })
+        });
+
+        if (res.ok) {
+          const blob = await res.blob();
+          const url = window.URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = `yue2_export_${selectedSongIds.size}_songs.zip`;
+          document.body.appendChild(a);
+          a.click();
+          a.remove();
+          closeBatchDlModal();
+        } else {
+          alert('ZIPの生成に失敗しました。');
+        }
+      } catch (e) {
+        console.error(e);
+        alert('ダウンロードエラーが発生しました。');
+      } finally {
+        btn.disabled = false;
+        btn.innerHTML = `<i data-lucide="download" class="w-4 h-4"></i> ZIP生成 & ダウンロード`;
+        lucide.createIcons();
+      }
+    }
+
+    // --- 検索イベント ---
+    function setupSearchListeners() {
+      const input = document.getElementById('search-input');
+      const clearBtn = document.getElementById('search-clear-btn');
+      const sortSelect = document.getElementById('sort-select');
+
+      input.addEventListener('input', () => {
+        clearBtn.classList.toggle('hidden', !input.value);
+        applyFilterAndRender();
+      });
+
+      clearBtn.addEventListener('click', () => {
+        input.value = '';
+        clearBtn.classList.add('hidden');
+        applyFilterAndRender();
+      });
+
+      sortSelect.addEventListener('change', () => {
+        applyFilterAndRender();
+      });
+
+      document.getElementById('refresh-btn').addEventListener('click', () => {
+        triggerSync();
+      });
+
+      document.getElementById('settings-btn').addEventListener('click', openSettingsModal);
+    }
+
+    // --- モーダル制御: 動画 ---
+    function openVideoModal(id) {
+      const song = allSongs.find(s => s.id === id);
+      if (!song || !song.video_id) return;
+
+      document.getElementById('video-modal-title').textContent = `${song.title} - 1080p ビジュアライザー動画`;
+      document.getElementById('video-modal-style').textContent = song.style || 'YuE2 Visualizer';
+      
+      const v = document.getElementById('modal-video-element');
+      const dlLink = document.getElementById('video-modal-download-link');
+
+      if (!song.video_id.startsWith('demo_')) {
+        v.src = `/api/media/${song.video_id}`;
+        dlLink.href = `/api/media/${song.video_id}`;
+      } else {
+        v.src = 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4';
+        dlLink.href = '#';
+      }
+
+      document.getElementById('video-modal').classList.remove('hidden');
+      v.play().catch(e => console.log(e));
+    }
+
+    function openCurrentVideoModal() {
+      if (currentSongIndex >= 0) openVideoModal(allSongs[currentSongIndex].id);
+    }
+
+    function closeVideoModal() {
+      const v = document.getElementById('modal-video-element');
+      v.pause();
+      v.src = '';
+      document.getElementById('video-modal').classList.add('hidden');
+    }
+
+    // --- モーダル: 歌詞 & プロンプト ---
+    function openLyricsModal(id) {
+      const song = allSongs.find(s => s.id === id);
+      if (!song) return;
+      currentLyricsSong = song;
+
+      document.getElementById('lyrics-modal-title').textContent = song.title;
+      document.getElementById('lyrics-modal-style').textContent = song.style || 'AI Generated';
+
+      document.getElementById('lyrics-content-raw').textContent = song.lyrics_raw || '(歌詞テキストなし)';
+      document.getElementById('lyrics-content-opt').textContent = song.lyrics_opt || '(最適化歌詞なし)';
+      
+      document.getElementById('lyrics-content-info').innerHTML = `
+        <div class="p-3 rounded-xl bg-slate-950 border border-slate-800 space-y-1">
+          <div><strong class="text-cyan-400">タイトル:</strong> ${escapeHtml(song.title)}</div>
+          <div><strong class="text-cyan-400">音楽スタイル:</strong> ${escapeHtml(song.style || 'N/A')}</div>
+          <div><strong class="text-cyan-400">テーマ・世界観:</strong> ${escapeHtml(song.theme || 'N/A')}</div>
+          <div><strong class="text-cyan-400">シード値:</strong> ${escapeHtml(song.seed || 'N/A')}</div>
+          <div><strong class="text-cyan-400">実行トリガー:</strong> ${escapeHtml(song.trigger || 'N/A')}</div>
+          <div><strong class="text-cyan-400">生成日時:</strong> ${escapeHtml(song.timestamp || 'N/A')}</div>
+        </div>
+      `;
+
+      switchLyricsTab('raw');
+      document.getElementById('lyrics-modal').classList.remove('hidden');
+    }
+
+    function openCurrentLyricsModal() {
+      if (currentSongIndex >= 0) openLyricsModal(allSongs[currentSongIndex].id);
+    }
+
+    function closeLyricsModal() {
+      document.getElementById('lyrics-modal').classList.add('hidden');
+    }
+
+    function switchLyricsTab(tab) {
+      ['raw', 'opt', 'info'].forEach(t => {
+        const btn = document.getElementById(`modal-tab-${t}`);
+        const content = document.getElementById(`lyrics-content-${t}`);
+        if (t === tab) {
+          btn.className = 'pb-2.5 border-b-2 border-cyan-500 text-cyan-400 font-semibold';
+          content.classList.remove('hidden');
+        } else {
+          btn.className = 'pb-2.5 border-b-2 border-transparent text-slate-400 hover:text-slate-200';
+          content.classList.add('hidden');
+        }
+      });
+    }
+
+    function copyLyricsContent() {
+      if (!currentLyricsSong) return;
+      const text = `${currentLyricsSong.title}\n${currentLyricsSong.style}\n\n[歌詞]\n${currentLyricsSong.lyrics_raw}`;
+      navigator.clipboard.writeText(text);
+      const btnText = document.getElementById('copy-btn-text');
+      btnText.textContent = 'コピー完了！';
+      setTimeout(() => { btnText.textContent = 'コピー'; }, 2000);
+    }
+
+    // --- モーダル: リネーム ---
+    let renameTargetId = '';
+    function openRenameModal(id, currentTitle) {
+      renameTargetId = id;
+      document.getElementById('rename-input').value = currentTitle;
+      document.getElementById('rename-modal').classList.remove('hidden');
+      document.getElementById('rename-input').focus();
+    }
+
+    function closeRenameModal() {
+      document.getElementById('rename-modal').classList.add('hidden');
+    }
+
+    async function submitRename() {
+      const newName = document.getElementById('rename-input').value.trim();
+      if (!newName || !renameTargetId) return;
+
+      try {
+        const res = await fetch(`/api/songs/${renameTargetId}/rename`, {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({new_name: newName})
+        });
+        if (res.ok) {
+          const s = allSongs.find(song => song.id === renameTargetId);
+          if (s) s.title = newName;
+          applyFilterAndRender();
+          closeRenameModal();
+        } else {
+          alert('リネームに失敗しました。');
+        }
+      } catch (e) {
+        console.error(e);
+        alert('通信エラーが発生しました。');
+      }
+    }
+
+    // --- モーダル: 設定 ---
+    function openSettingsModal() {
+      document.getElementById('settings-modal').classList.remove('hidden');
+    }
+    function closeSettingsModal() {
+      document.getElementById('settings-modal').classList.add('hidden');
+    }
+
+    // --- ユーティリティ ---
+    function escapeHtml(str) {
+      if (!str) return '';
+      return String(str).replace(/[&<>"']/g, m => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;'
+      })[m]);
+    }
+  </script>
+</body>
+</html>

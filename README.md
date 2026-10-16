@@ -69,6 +69,10 @@
 ```text
 yue2_modal/
 ├── app.py              # パイプライン本体（L4推論, Web UI, Cron, 歌詞最適化, 時間制限, MP3変換, Drive同期, Discord通知）
+├── manager.py          # Google Drive 成果物管理マネージャー（FastAPI, 連続再生, 統計表示, 並列スキャン, ZIP一括DL）
+├── templates/
+│   └── index.html      # 管理ダッシュボード Single Page Web UI (Tailwind CSS)
+├── export_secrets.py   # Modal Secret から Google Drive 認証情報を取得して .env に書き出すスクリプト
 ├── test_drive.py       # Google Drive 接続診断スクリプト（CPU・数秒で動作）
 ├── test_mp3_sync.py    # Google Drive mp3 フォルダ疎通確認スクリプト（CPU・数秒で動作）
 ├── test_modal_gemini.py# Gemini API 自律作詞のクラウド動作確認スクリプト
@@ -156,6 +160,18 @@ modal volume ls yue2-generated-songs
 # ローカルフォルダへ一括ダウンロード
 modal volume get yue2-generated-songs / outputs_cloud/
 ```
+
+### 7. Google Drive 成果物管理 Web ツールの起動 (manager.py)
+Google Drive 上に保存された全楽曲の連続再生、1080p動画プレビュー、歌詞・プロンプト確認、ジャンル・雰囲気統計からの絞り込み、ZIP一括ダウンロードを行えるWebダッシュボードです。
+
+```bash
+# ① Modal Secret から Google Drive 認証情報を取得して .env を自動生成（初回のみ）
+modal run export_secrets.py
+
+# ② 管理サーバーを起動
+python manager.py
+```
+起動後、ブラウザで **http://localhost:8000** にアクセスして操作できます。
 
 ---
 

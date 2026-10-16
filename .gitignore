@@ -13,3 +13,6 @@ test_drive*.py
 .env
 .env.*
 
+# ローカルキャッシュ
+drive_cache.json
+
