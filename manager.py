@@ -133,16 +133,23 @@ class DriveManager:
         }
 
         try:
-            # 1. ターゲットフォルダ配下のサブフォルダ一覧を一括取得
+            # 1. ターゲットフォルダ配下のサブフォルダ一覧を一括取得 (ページネーション対応)
             query = f"'{self.target_folder_id}' in parents and mimeType = 'application/vnd.google-apps.folder' and trashed = false"
-            res = self.service.files().list(
-                q=query,
-                spaces="drive",
-                fields="files(id, name, createdTime, modifiedTime)",
-                pageSize=100,
-                orderBy="createdTime desc"
-            ).execute()
-            raw_folders = res.get("files", [])
+            raw_folders = []
+            page_token = None
+            while True:
+                res = self.service.files().list(
+                    q=query,
+                    spaces="drive",
+                    fields="nextPageToken, files(id, name, createdTime, modifiedTime)",
+                    pageSize=1000,
+                    pageToken=page_token,
+                    orderBy="createdTime desc"
+                ).execute()
+                raw_folders.extend(res.get("files", []))
+                page_token = res.get("nextPageToken")
+                if not page_token:
+                    break
 
             # 集約フォルダ・管理用フォルダを除外
             folders = [
@@ -218,7 +225,7 @@ class DriveManager:
             q=file_query,
             spaces="drive",
             fields="files(id, name, size, mimeType)",
-            pageSize=30
+            pageSize=100
         ).execute()
         children = files_res.get("files", [])
 
