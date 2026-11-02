@@ -569,9 +569,18 @@ def notify_discord(
         if has_video:
             artifacts_desc += "\n・🎬 動画: 1080p フルHD ビジュアライザー動画"
 
+        if has_cover or has_video:
+            embed_title = f"🎉 新曲・マルチメディア完成: {title}"
+            embed_desc = f"**{theme}**\n\nYuE2推論、ジャケット・動画化、およびGoogle Driveへの自動保存が完了しました！"
+            footer_text = "YuE2 × Modal マルチメディア自動生成 (ジャケット＆動画対応)"
+        else:
+            embed_title = f"🎉 新曲完成: {title}"
+            embed_desc = f"**{theme}**\n\nYuE2推論、192kbps MP3変換、およびGoogle Driveへの自動保存が完了しました！"
+            footer_text = "YuE2 × Modal クラウド楽曲自動生成パイプライン"
+
         embed = {
-            "title": f"🎉 新曲・マルチメディア完成: {title}",
-            "description": f"**{theme}**\n\nYuE2推論、3000pxジャケット生成、1080pビジュアライザー動画化、およびGoogle Driveへの自動保存が完了しました！",
+            "title": embed_title,
+            "description": embed_desc,
             "color": 0x1A73E8,  # Google Blue
             "fields": [
                 {
@@ -601,7 +610,7 @@ def notify_discord(
                 },
             ],
             "footer": {
-                "text": "YuE2 × Modal マルチメディア自動生成 (ジャケット＆動画対応)",
+                "text": footer_text,
             },
             "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
         }
@@ -848,7 +857,7 @@ def generate_music_core(
 ) -> dict:
     """
     L4 GPU上でYuE2モデルをロードし、シンボリック・プランニング（ABC楽譜）を経て楽曲を生成します。
-    生成後は192kbps MP3変換、3000pxジャケット生成、1080pビジュアライザー動画化を行い、
+    生成後は192kbps MP3変換を行い（ジャケット・動画生成は一時停止中）、
     Modal Volume および Google Drive へ保存、Discord へ通知します。
     """
     from yue2 import YuE2Pipeline
@@ -875,25 +884,37 @@ def generate_music_core(
         if convert_flac_to_mp3(flac_file, mp3_file, bitrate="192k"):
             print(f"--- [FFmpeg] MP3 変換完了: {mp3_file.name} (サイズ: {mp3_file.stat().st_size / 1024 / 1024:.2f} MB) ---")
 
-    # 【マルチメディア展開】ジャケット画像 (3000x3000px) ＆ ビジュアライザー動画 (1080p MP4) の自動生成
-    cover_raw = temp_out / "cover_raw.png"
-    cover_3000 = temp_out / "cover_art_3000.jpg"
-    has_cover = generate_cover_art(
-        title=title,
-        theme_description=theme_description,
-        style_prompt=style_prompt,
-        output_png_path=cover_raw,
-        output_3000_jpg_path=cover_3000,
-    )
+    # 【マルチメディア展開】ジャケット画像 (3000x3000px) ＆ ビジュアライザー動画 (1080p MP4)
+    # ※画像品質向上・別生成手法の検討のため、現在ジャケット・動画の自動生成は一時停止中
+    # （再開時は環境変数 ENABLE_COVER_ART=true, ENABLE_VISUALIZER=true にて有効化可能）
+    ENABLE_COVER_ART = os.environ.get("ENABLE_COVER_ART", "false").lower() == "true"
+    ENABLE_VISUALIZER = os.environ.get("ENABLE_VISUALIZER", "false").lower() == "true"
 
-    video_file = temp_out / "video.mp4"
+    has_cover = False
+    if ENABLE_COVER_ART:
+        cover_raw = temp_out / "cover_raw.png"
+        cover_3000 = temp_out / "cover_art_3000.jpg"
+        has_cover = generate_cover_art(
+            title=title,
+            theme_description=theme_description,
+            style_prompt=style_prompt,
+            output_png_path=cover_raw,
+            output_3000_jpg_path=cover_3000,
+        )
+    else:
+        print("--- [マルチメディア] ジャケット画像自動生成は一時停止中（スキップ） ---")
+
     has_video = False
-    if has_cover and mp3_file.exists():
+    if ENABLE_VISUALIZER and has_cover and mp3_file.exists():
+        video_file = temp_out / "video.mp4"
         has_video = render_visualizer_video(
             cover_image_path=cover_raw,
             audio_path=mp3_file,
             output_video_path=video_file,
         )
+    else:
+        if not ENABLE_VISUALIZER:
+            print("--- [マルチメディア] 波形ビジュアライザー動画生成は一時停止中（スキップ） ---")
 
     # Modal Volume への永続保存
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -1215,7 +1236,7 @@ async def handle_generate_ai(request: Request):
             <b>スタイル:</b> {plan['style_prompt']}<br>
             <b>シード値:</b> {seed}
         </p>
-        <p style="font-size:14px;">生成完了後、<b>Google Drive (個別フォルダ ＆ mp3/covers/videos 集約フォルダ)</b> および <b>Discord通知</b> に自動転送されます（音源・3000pxジャケット・動画フルセット）。</p>
+        <p style="font-size:14px;">生成完了後、<b>Google Drive (個別フォルダ ＆ mp3集約フォルダ)</b> および <b>Discord通知</b> に自動転送されます（FLAC音源 ＆ 192kbps MP3）。</p>
         <p style="margin-top:24px;"><a href="/" style="display:inline-block; padding:10px 20px; background:#1a73e8; color:white; text-decoration:none; border-radius:6px;">← もう1曲生成する</a></p>
     </div>
 </body></html>"""
@@ -1246,7 +1267,7 @@ async def handle_generate_manual(request: Request):
     <div style="max-width:550px; margin:auto; background:white; padding:30px; border-radius:12px; box-shadow:0 2px 8px rgba(0,0,0,0.08);">
         <h3 style="color:#1a73e8;">🚀 生成リクエストを受け付けました</h3>
         <p>曲名: <b>{title}</b> (Seed: {seed})</p>
-        <p>クラウドGPU（L4）にて生成中です。完了後は <b>Google Drive (個別フォルダ ＆ mp3/covers/videos 集約フォルダ)</b> および <b>Discord</b> に自動送信されます（音源・3000pxジャケット・動画フルセット）。</p>
+        <p>クラウドGPU（L4）にて生成中です。完了後は <b>Google Drive (個別フォルダ ＆ mp3集約フォルダ)</b> および <b>Discord</b> に自動送信されます（FLAC音源 ＆ 192kbps MP3）。</p>
         <p style="margin-top:24px;"><a href="/" style="display:inline-block; padding:10px 20px; background:#1a73e8; color:white; text-decoration:none; border-radius:6px;">← もう1曲生成する</a></p>
     </div>
 </body></html>"""
